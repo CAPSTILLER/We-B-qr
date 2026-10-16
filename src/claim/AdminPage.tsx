@@ -68,7 +68,7 @@ export function AdminPage() {
         <button onClick={() => run(api("deleteFolder", { id: folder }).then(() => setFolder("all")))}>Delete (if empty)</button></div>}
       {sel.length > 0 && <div className="card row">
         <select onChange={(e) => { if (e.target.value) run(api("move", { ids: sel, folderId: e.target.value }).then(() => setSel([]))); }} defaultValue=""><option value="">Move {sel.length} to…</option>{st.folders.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}</select>
-        {owner && <RefillButton ids={sel} st={st} done={() => { setSel([]); load(); }} onErr={setErr} />}
+        {<RefillButton ids={sel} st={st} done={() => { setSel([]); load(); }} onErr={setErr} />}
       </div>}
       {owner && <p className="muted">Allowed tokens: {st.allowedTokens.map((t) => (t.startsWith("0x") ? short(t) : t)).join(", ")} · <a style={{ color: "#EAA221" }} onClick={() => { const v = prompt("Extra allowed token addresses (comma separated). GEAR + CAPH are always allowed.", st.allowedTokens.filter((t) => t.startsWith("0x")).join(",")); if (v !== null) run(api("setAllowedTokens", { tokens: v.split(",") })); }}>edit</a></p>}
       {shown.length === 0 && <p className="muted">No codes here yet. Tap “+ New code” to create and name one.</p>}
@@ -101,7 +101,7 @@ function RefillButton({ ids, st, done, onErr }: { ids: string[]; st: State; done
     const data = encodeFunctionData({ abi: CONTRACT_ABI, functionName: "refill", args: [list.map((c) => c.slotKey), TOKEN_ADDR[tok] ?? tok, list.map((c) => raw(c.amount, DEC[tok] ?? 18))] });
     sendTx(st.me as `0x${string}`, st.contract as `0x${string}`, data).then(() => { setPending(null); done(); }).catch((e) => onErr(e?.shortMessage ?? e.message));
   };
-  return pending ? <button className="on" onClick={sendOnchain}>Approve refill on Ledger ({pending.length})</button> : <button onClick={refill}>Refill {ids.length}</button>;
+  return pending ? <button className="on" onClick={sendOnchain}>Approve refill in wallet ({pending.length})</button> : <button onClick={refill}>Refill {ids.length}</button>;
 }
 
 function CodeForm({ st, onSaved, onErr, edit }: { st: State; onSaved: (c: Code) => void; onErr: (e: string) => void; edit?: Code }) {
@@ -125,7 +125,7 @@ function CodeForm({ st, onSaved, onErr, edit }: { st: State; onSaved: (c: Code) 
     <label>Gate (optional: only holders of this NFT/token contract can claim)</label><input placeholder="0x… gate contract" value={f.gate ?? ""} onChange={(e) => set("gate", e.target.value.trim())} />
     <label>Link buttons on the card (up to 3)</label>
     {links.map((l, i) => <div className="row" key={i} style={{ marginBottom: 6 }}><input placeholder={`Button ${i + 1} label`} value={l.label} onChange={(e) => setLink(i, "label", e.target.value)} /><input placeholder="https://…" value={l.url} onChange={(e) => setLink(i, "url", e.target.value)} /></div>)}
-    {!edit && st.role !== "owner" && <p className="warn">Teammate: settings are locked after you create the code. Only the Ledger can edit, refill, retire or rotate it.</p>}
+    {!edit && st.role !== "owner" && <p className="warn">Teammate: settings are locked after you create the code. You can refill and retire it; only the Ledger can edit or rotate.</p>}
     <p className="muted">Each claim: once per wallet per code. Empty until you refill; refill unlocks at a random time inside the window.</p>
     <button className="big" onClick={save}>{edit ? "Save rules" : "Create code"}</button>
   </div>);
@@ -159,10 +159,10 @@ function CodeDetail({ id, st, back, onErr }: { id: string; st: State; back: () =
       <div className="seg" style={{ marginTop: 10 }}>
         <button onClick={() => setShowQr(!showQr)}>{showQr ? "Hide QR" : "Show QR"}</button>
         {showQr && <button onClick={() => api("logPrint", { ids: [id] }).then(() => print())}>🖨 Print</button>}
-        {owner && c.status === "active" && <RefillButton ids={[id]} st={st} done={load} onErr={onErr} />}
+        {c.status === "active" && <RefillButton ids={[id]} st={st} done={load} onErr={onErr} />}
         {owner && <button onClick={() => setEditing(true)}>Edit rules</button>}
         {owner && c.status === "active" && <button onClick={() => confirm("Rotate: new random link, old one dies?") && act("rotate")}>Rotate</button>}
-        {owner && c.status === "active" && <button onClick={() => confirm("Retire this code?") && act("retire")}>Retire</button>}
+        {c.status === "active" && <button onClick={() => confirm("Retire this code? Its balance goes back to the contract float.") && act("retire")}>Retire</button>}
         <button onClick={() => api("move", { ids: [id], folderId: "bot-grab" }).then(back)}>→ Bot grab</button>
       </div></div>
     {showQr && <div className="card" style={{ background: "#fff", textAlign: "center" }}><div style={{ maxWidth: 320, margin: "0 auto" }} dangerouslySetInnerHTML={{ __html: svg }} /><div className="muted noprint" style={{ color: "#555" }}>{url}</div></div>}

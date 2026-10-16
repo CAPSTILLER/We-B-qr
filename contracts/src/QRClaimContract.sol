@@ -6,6 +6,7 @@ interface IERC20 {
     function balanceOf(address a) external view returns (uint256);
 }
 /// GearVault: approved operator pays any recipient (<= maxDispense, <= dailyCap)
+interface IERC721Balance { function balanceOf(address owner) external view returns (uint256); }
 interface IGearVault { function dispense(address recipient, uint256 amount) external; }
 /// CAPHVault: approved game pays any recipient with a unique ref
 interface ICaphVault { function payout(address to, uint256 amount, bytes32 ref) external; }
@@ -21,6 +22,8 @@ contract QRClaimContract {
     address public owner;
     address public signer;
     address public refiller;
+    /// Team NFT (CAPs Mind). Holders may refill from float, pull from approved vaults, and retire slots.
+    address public teamNft = 0x00635CA44339C7c194eF5bc87Bf2cd6df04a666D;
     bool public paused;
 
     mapping(address => bool) public allowedToken;
@@ -38,6 +41,7 @@ contract QRClaimContract {
     event OwnerChanged(address owner);
     event SignerChanged(address signer);
     event RefillerChanged(address refiller);
+    event TeamNftChanged(address nft);
     event TokenAllowed(address token, bool allowed);
     event VaultSet(address vault, address token, VaultKind kind);
     event Pulled(address vault, address token, uint256 amount);
@@ -52,7 +56,13 @@ contract QRClaimContract {
     error SlotRetired(); error TokenMismatch(); error Length(); error TransferFailed(); error Zero(); error AllowedToken();
 
     modifier onlyOwner() { if (msg.sender != owner) revert NotOwner(); _; }
-    modifier onlyRefiller() { if (msg.sender != owner && msg.sender != refiller) revert NotRefiller(); _; }
+    /// Owner, approved refiller, or a team NFT holder. None of these paths can move tokens out.
+    modifier onlyRefiller() { if (!isOperatorOrTeam(msg.sender)) revert NotRefiller(); _; }
+    function isOperatorOrTeam(address a) public view returns (bool) {
+        if (a == owner || (refiller != address(0) && a == refiller)) return true;
+        if (teamNft.code.length == 0) return false;
+        try IERC721Balance(teamNft).balanceOf(a) returns (uint256 b) { return b > 0; } catch { return false; }
+    }
 
     constructor(address _owner, address _signer, address[] memory tokens) {
         if (_owner == address(0) || _signer == address(0)) revert Zero();
@@ -67,6 +77,7 @@ contract QRClaimContract {
     function setOwner(address o) external onlyOwner { if (o == address(0)) revert Zero(); owner = o; emit OwnerChanged(o); }
     function setSigner(address s) external onlyOwner { if (s == address(0)) revert Zero(); signer = s; emit SignerChanged(s); }
     function setRefiller(address r) external onlyOwner { refiller = r; emit RefillerChanged(r); }
+    function setTeamNft(address n) external onlyOwner { teamNft = n; emit TeamNftChanged(n); }
     function setPaused(bool p) external onlyOwner { paused = p; emit Paused(p); }
     function setTokenAllowed(address t, bool a) external onlyOwner { allowedToken[t] = a; emit TokenAllowed(t, a); }
     function setVault(address v, address token, VaultKind kind) external onlyOwner {
@@ -104,8 +115,8 @@ contract QRClaimContract {
         assigned[token] += total;
     }
 
-    /// Retire a slot; its balance returns to the float.
-    function retire(bytes32 key) external onlyOwner {
+    /// Retire a slot; its balance returns to the unassigned float (never leaves the contract).
+    function retire(bytes32 key) external onlyRefiller {
         Slot storage s = slots[key];
         uint256 b = s.balance;
         assigned[s.token] -= b; s.balance = 0; s.retired = true; s.epoch += 1;

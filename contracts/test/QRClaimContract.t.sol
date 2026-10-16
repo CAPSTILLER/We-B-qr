@@ -8,6 +8,7 @@ contract MockToken {
     function mint(address a, uint256 n) external { balanceOf[a] += n; }
     function transfer(address to, uint256 n) external returns (bool) { balanceOf[msg.sender] -= n; balanceOf[to] += n; return true; }
 }
+contract MockNft { mapping(address => uint256) public balanceOf; function mint(address a) external { balanceOf[a] += 1; } }
 contract MockGearVault {
     MockToken t; mapping(address => bool) public isOperator;
     constructor(MockToken _t) { t = _t; }
@@ -90,6 +91,28 @@ contract QRClaimTest is Test {
         vm.expectRevert(QRClaimContract.BadVault.selector); c.pullFromVault(address(0xDEAD), 1);
         vm.stopPrank();
         assertEq(gear.balanceOf(address(c)), 60e6); assertEq(caph.balanceOf(address(c)), 10e6);
+    }
+    function testTeamNftCanRefillRetirePullButNotWithdraw() public {
+        MockNft nft = new MockNft(); address mate = address(0x7EA7); nft.mint(mate);
+        vm.prank(ledger); c.setTeamNft(address(nft));
+        MockGearVault gv = new MockGearVault(gear); gear.mint(address(gv), 100e6);
+        vm.startPrank(ledger); c.setVault(address(gv), address(gear), QRClaimContract.VaultKind.GearVault); gv.authorizeOperator(address(c)); vm.stopPrank();
+        bytes32[] memory k = new bytes32[](1); k[0] = key; uint128[] memory a = new uint128[](1); a[0] = 11e6;
+        vm.startPrank(mate);
+        vm.expectRevert(QRClaimContract.Insufficient.selector); c.refill(k, address(gear), a); // > unassigned float (10)
+        c.pullFromVault(address(gv), 5e6);
+        vm.expectRevert(bytes("max")); c.pullFromVault(address(gv), 51e6); // vault cap still applies
+        c.refill(k, address(gear), a);
+        assertEq(c.float(address(gear)), 4e6);
+        c.retire(key);
+        assertEq(c.float(address(gear)), 15e6);
+        vm.expectRevert(QRClaimContract.NotOwner.selector); c.withdraw(address(gear), mate, 1);
+        vm.expectRevert(QRClaimContract.NotOwner.selector); c.setPaused(true);
+        vm.expectRevert(QRClaimContract.NotOwner.selector); c.setTeamNft(address(0));
+        vm.expectRevert(QRClaimContract.NotOwner.selector); c.setTokenAllowed(address(junk), true);
+        vm.expectRevert(QRClaimContract.NotOwner.selector); c.rescueToken(address(junk), mate, 0);
+        vm.stopPrank();
+        vm.prank(address(0xBEEF)); vm.expectRevert(QRClaimContract.NotRefiller.selector); c.refill(k, address(gear), a);
     }
     function testWithdrawOnlyFloatAndRescue() public {
         _refill(4e6);

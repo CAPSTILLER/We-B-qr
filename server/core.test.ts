@@ -36,11 +36,13 @@ describe("QR claim server", () => {
     const tc: any = await call({ action: "createCode", code: { name: "Mate code", kind: "digital", token: "CAPH", amount: "2", unlockWindowH: 6, dailyCap: 2, gate: W, links: [{ label: "Hub", url: "https://hub.gearup.wtf" }] } }, mate);
     expect(tc.status).toBe(200); expect(tc.json).toMatchObject({ token: "CAPH", basenameOnly: true, dailyCap: 2, gate: W, createdRole: "teammate" });
     expect((await call({ action: "createCode", code: { name: "x", token: "0x4444444444444444444444444444444444444444" } }, mate)).status).toBe(403);
-    for (const a of ["updateCode", "retire", "rotate", "refill", "setAllowedTokens", "audit"]) expect((await call({ action: a, id: tc.json.id, ids: [tc.json.id], code: { name: "y" }, tokens: [] }, mate)).status).toBe(403);
+    for (const a of ["updateCode", "rotate", "setAllowedTokens", "audit"]) expect((await call({ action: a, id: tc.json.id, ids: [tc.json.id], code: { name: "y" }, tokens: [] }, mate)).status).toBe(403);
+    expect((await call({ action: "refill", ids: [tc.json.id] }, mate)).status).toBe(200);
+    expect((await call({ action: "retire", id: tc.json.id }, mate)).status).toBe(200);
     await call({ action: "setAllowedTokens", tokens: ["0x4444444444444444444444444444444444444444"] }, owner);
     expect((await call({ action: "createCode", code: { name: "x", token: "0x4444444444444444444444444444444444444444" } }, mate)).status).toBe(200);
     const au: any = await call({ action: "audit" }, owner);
-    expect(au.json.some((x: any) => x.action === "teammate_create_code" && x.actor === TM)).toBe(true);
+    for (const k of ["teammate_create_code", "teammate_refill", "teammate_retire"]) expect(au.json.some((x: any) => x.action === k && x.actor === TM)).toBe(true);
     const c: any = await call({ action: "createCode", code: { name: "Gear #1", folderId: f.json.id, kind: "paper" } }, owner);
     expect(c.status).toBe(200);
     expect((await call({ action: "move", ids: [c.json.id], folderId: "bot-grab" }, mate)).status).toBe(200);
@@ -49,7 +51,6 @@ describe("QR claim server", () => {
     await call({ action: "refill", ids: [g.id] }, owner);
     expect((await call({ action: "prepare", id: g.id, wallet: W })).status).toBe(403);
     expect((await call({ action: "prepare", id: g.id, wallet: W2 })).status).toBe(200);
-    expect((await call({ action: "refill", ids: [c.json.id] }, mate)).status).toBe(403);
     const st: any = await call({ action: "state" }, mate);
     expect(st.json.codes.find((x: any) => x.id === c.json.id).folderId).toBe("bot-grab");
     expect(st.json.folders.some((x: any) => x.name === "Bot grab")).toBe(true);

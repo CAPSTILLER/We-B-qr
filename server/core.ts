@@ -181,18 +181,18 @@ export class QrClaim {
     await this.s.hset("codes", id, c); await this.audit(actor, "update_code", [id]); return c;
   }
   /** Marks a refill: random unlock inside the window. Onchain, the Ledger/refiller must also call refill(). */
-  async refill(actor: string, ids: string[]) {
+  async refill(actor: string, ids: string[], role: Role = "owner") {
     const out: Code[] = [];
     for (const id of ids) {
       const c = await this.code(id); if (!c || c.status !== "active") continue;
       c.filled = true; c.refilledAt = now(); c.unlockAt = now() + rnd(c.unlockWindowH * 3600e3);
       await this.s.hset("codes", id, c); out.push(c);
     }
-    await this.audit(actor, "refill", ids); return { codes: out.map((c) => ({ id: c.id, slotKey: this.c.slotKey(c.id), token: c.token, amount: c.amount })) };
+    await this.audit(actor, role === "owner" ? "refill" : "teammate_refill", ids); return { codes: out.map((c) => ({ id: c.id, slotKey: this.c.slotKey(c.id), token: c.token, amount: c.amount })) };
   }
-  async retire(actor: string, id: string) {
+  async retire(actor: string, id: string, role: Role = "owner") {
     const c = await this.code(id); if (!c) throw new HttpError(404, "No such code");
-    c.status = "retired"; c.filled = false; await this.s.hset("codes", id, c); await this.audit(actor, "retire", [id]);
+    c.status = "retired"; c.filled = false; await this.s.hset("codes", id, c); await this.audit(actor, role === "owner" ? "retire" : "teammate_retire", [id]);
     return { code: c, slotKey: this.c.slotKey(id) };
   }
   /** New random ID with the same settings; the old one is retired (its old URL dies). */
