@@ -15,11 +15,6 @@ contract MockGearVault {
     function authorizeOperator(address o) external { isOperator[o] = true; }
     function dispense(address r, uint256 a) external { require(isOperator[msg.sender], "op"); require(a <= 50e6, "max"); t.transfer(r, a); }
 }
-contract MockCaphVault {
-    MockToken t; mapping(bytes32 => bool) used;
-    constructor(MockToken _t) { t = _t; }
-    function payout(address to, uint256 a, bytes32 ref) external { require(!used[ref], "ref"); used[ref] = true; t.transfer(to, a); }
-}
 
 contract QRClaimTest is Test {
     QRClaimContract c; MockToken gear; MockToken caph; MockToken junk;
@@ -75,37 +70,28 @@ contract QRClaimTest is Test {
         vm.expectRevert(QRClaimContract.NotOwner.selector); c.setSigner(bob);
         vm.expectRevert(QRClaimContract.NotOwner.selector); c.setTokenAllowed(address(junk), true);
         vm.expectRevert(QRClaimContract.NotOwner.selector); c.withdraw(address(gear), bob, 1);
-        vm.expectRevert(QRClaimContract.NotRefiller.selector); c.pullFromVault(address(1), 1);
         vm.stopPrank();
     }
-    function testVaultPulls() public {
+    function testVaultPushesOnly() public {
+        // Funding = the vault operator (e.g. Ledger-approved hot wallet) calls the vault to send here.
         MockGearVault gv = new MockGearVault(gear); gear.mint(address(gv), 100e6);
-        MockCaphVault cv = new MockCaphVault(caph); caph.mint(address(cv), 100e6);
-        vm.startPrank(ledger);
-        c.setVault(address(gv), address(gear), QRClaimContract.VaultKind.GearVault);
-        c.setVault(address(cv), address(caph), QRClaimContract.VaultKind.CaphVault);
-        gv.authorizeOperator(address(c));
-        c.setRefiller(bob); vm.stopPrank();
-        vm.startPrank(bob);
-        c.pullFromVault(address(gv), 50e6); c.pullFromVault(address(cv), 5e6); c.pullFromVault(address(cv), 5e6);
-        vm.expectRevert(QRClaimContract.BadVault.selector); c.pullFromVault(address(0xDEAD), 1);
-        vm.stopPrank();
-        assertEq(gear.balanceOf(address(c)), 60e6); assertEq(caph.balanceOf(address(c)), 10e6);
+        address op = address(0x0FE2); gv.authorizeOperator(op);
+        vm.prank(op); gv.dispense(address(c), 50e6);
+        assertEq(c.float(address(gear)), 60e6);
+        // the contract itself has no pull function
+        (bool ok,) = address(c).call(abi.encodeWithSignature("pullFromVault(address,uint256)", address(gv), 1));
+        assertFalse(ok);
     }
-    function testTeamNftCanRefillRetirePullButNotWithdraw() public {
+    function testTeamNftCanRefillRetireOnly() public {
         MockNft nft = new MockNft(); address mate = address(0x7EA7); nft.mint(mate);
         vm.prank(ledger); c.setTeamNft(address(nft));
-        MockGearVault gv = new MockGearVault(gear); gear.mint(address(gv), 100e6);
-        vm.startPrank(ledger); c.setVault(address(gv), address(gear), QRClaimContract.VaultKind.GearVault); gv.authorizeOperator(address(c)); vm.stopPrank();
         bytes32[] memory k = new bytes32[](1); k[0] = key; uint128[] memory a = new uint128[](1); a[0] = 11e6;
         vm.startPrank(mate);
         vm.expectRevert(QRClaimContract.Insufficient.selector); c.refill(k, address(gear), a); // > unassigned float (10)
-        c.pullFromVault(address(gv), 5e6);
-        vm.expectRevert(bytes("max")); c.pullFromVault(address(gv), 51e6); // vault cap still applies
-        c.refill(k, address(gear), a);
+        a[0] = 6e6; c.refill(k, address(gear), a);
         assertEq(c.float(address(gear)), 4e6);
         c.retire(key);
-        assertEq(c.float(address(gear)), 15e6);
+        assertEq(c.float(address(gear)), 10e6);
         vm.expectRevert(QRClaimContract.NotOwner.selector); c.withdraw(address(gear), mate, 1);
         vm.expectRevert(QRClaimContract.NotOwner.selector); c.setPaused(true);
         vm.expectRevert(QRClaimContract.NotOwner.selector); c.setTeamNft(address(0));

@@ -9,7 +9,7 @@ QR modes: "Pay page" works with any phone camera. "Wallet app (EIP-681)" encodes
 `ethereum:<token>@8453/transfer?address=<to>&uint256=<raw>` for in-wallet scanners (needs a 0x address).
 
 ## QR Claim system (separate section)
-- `/claim-admin`: admin. The owner Ledger `0xD8382719b8fF90eE3Dd521B9d7c5dc23E8e4EAca` sets all rules. CAPs Mind NFT holders (ERC-721 `0x00635ca44339c7c194ef5bc87bf2cd6df04a666d`, checked at sign-in) can create codes (tokens only from the Ledger allowed list), view, print, organize, **refill and retire**. Refill and retire also work onchain from their own wallet: the contract checks `teamNft.balanceOf(msg.sender) > 0`. Only the Ledger edits settings after creation, rotates, changes allowed tokens, vaults or signer, pauses, withdraws or rescues. Teammate creations are audit-logged. Optional per-code gate: live balanceOf check at claim time (snapshot mode not built yet). Login is one free wallet signature (EOA or smart wallet), and the session lasts 12 h.
+- `/claim-admin`: admin. The owner Ledger `0xD8382719b8fF90eE3Dd521B9d7c5dc23E8e4EAca` sets all rules. CAPs Mind NFT holders (ERC-721 `0x00635ca44339c7c194ef5bc87bf2cd6df04a666d`, checked at sign-in) can create codes (tokens only from the Ledger allowed list), view, print, organize, **refill and retire**. Refill and retire also work onchain from their own wallet: the contract checks `teamNft.balanceOf(msg.sender) > 0`. Only the Ledger edits settings after creation, rotates, changes allowed tokens or signer, pauses, withdraws or rescues. Teammate creations are audit-logged. Optional per-code gate: live balanceOf check at claim time (snapshot mode not built yet). Login is one free wallet signature (EOA or smart wallet), and the session lasts 12 h.
 - `/c/<randomId>`: scan card with up to 3 link buttons plus Claim. Empty, locked and retired codes still show the buttons, with "Claim empty". IDs are random 128-bit values, and serials appear only in admin.
 - API: `POST /api/qrclaim {action}` (Vercel function, `server/`). Storage is Upstash Redis with keys prefixed `qrclaim:`.
 - No codes are pre-generated. Cap creates and names each one (name, folder, token GEAR/CAPH/allowlisted address, amount, unlock window, wallet claims/day, paper/digital, Basename-only, 3 links).
@@ -18,7 +18,7 @@ QR modes: "Pay page" works with any phone camera. "Wallet app (EIP-681)" encodes
 
 ### Contract: `contracts/src/QRClaimContract.sol` (NOT deployed)
 Constructor: `QRClaimContract(address owner, address signer, address[] tokens)`. `teamNft` defaults to CAPs Mind `0x00635CA44339C7c194eF5bc87Bf2cd6df04a666D`, and the owner can change it with `setTeamNft`.
-Permissions: **owner, refiller or a team NFT holder** can call `refill` (only from unassigned float, so it can never exceed it), `pullFromVault` (approved vaults only, still capped by each vault's limits) and `retire` (the slot balance returns to unassigned float). **Owner only:** `withdraw`, `rescueToken`, `setPaused`, `setTokenAllowed`, `setVault`, `setSigner`, `setRefiller`, `setTeamNft`, `setOwner`. No team or refiller path moves tokens out of the contract.
+Permissions: **owner, refiller or a team NFT holder** can call only `refill` (assigns unassigned float already in the contract to slots, so it can never exceed it) and `retire` (the slot balance returns to unassigned float). **There is no pull-from-vault function.** Tokens enter only by plain transfers: any wallet, or a vault operator calling the vault to send to this contract. **Owner only:** `withdraw`, `rescueToken`, `setPaused`, `setTokenAllowed`, `setSigner`, `setRefiller`, `setTeamNft`, `setOwner`. No team or refiller path moves tokens out of the contract.
 - owner = `0xD8382719b8fF90eE3Dd521B9d7c5dc23E8e4EAca` (Cap's Ledger)
 - signer = address of the `CLAIM_SIGNER_KEY` wallet (a fresh key used only for this; it can only authorize claims)
 - tokens = `[0x5880cD05605A549f1DAb01a53ca61Ee559244bD1 (GEAR, 6 dec), 0x1d1bcd1459259429accde23e24e1782f83e97ba3 (CAPH, 18 dec)]`
@@ -27,11 +27,13 @@ Tests: `cd contracts && forge install foundry-rs/forge-std --no-git && forge tes
 
 Deploy (Bankr), then Ledger approvals (the Ledger only signs; it never sends tokens):
 1. Deploy with the args above on Base and verify on BaseScan. Note the deploy block.
-2. Ledger: `setVault(GearVault, GEAR, 1)` and `setVault(CAPHVault 0xc7d5a9fed7f1b2d00ab404aa4f867df131ef4ba4, CAPH, 2)`.
-3. Ledger on the vaults: `GearVault.authorizeOperator(QRClaimContract)` and `CAPHVault.setGame(QRClaimContract, dailyCap, maxPerPayout)`.
-4. Optional: Ledger calls `setRefiller(<hot key>)` so bulk pulls and refills don't need the Ledger each time.
-5. Fund: `pullFromVault(vault, amount)` (refiller or owner), or any wallet sends GEAR/CAPH directly. Then refill from admin, which prompts the owner wallet for `refill(keys, token, amounts)`.
-6. Set Vercel env (below) and redeploy. The app leaves demo mode once `QRCLAIM_CONTRACT` is set.
+2. Vault funding is vault-side only. Do **not** make the QR Claim contract a vault operator or game. Whoever is already approved on the vault sends to the contract:
+   - GearVault: an authorized operator (the Ledger itself, or an operator wallet the Ledger approved with `authorizeOperator`) calls `GearVault.dispense(QRClaimContract, amount)`. Limit: 50 GEAR per call, 10k per day.
+   - CAPHVault `0xc7d5a9fed7f1b2d00ab404aa4f867df131ef4ba4`: an approved game wallet (set by the Ledger with `setGame(wallet, dailyCap, maxPerPayout)`) calls `payout(QRClaimContract, amount, uniqueRef)`.
+   - Or any wallet transfers GEAR/CAPH straight to the contract.
+3. Optional: the Ledger calls `setRefiller(<hot key>)`. That key can only refill and retire slots.
+4. Refill from admin: the owner, refiller or a CAPs Mind holder approves `refill(keys, token, amounts)` from their own wallet, using unassigned tokens already in the contract.
+5. Set Vercel env (below) and redeploy. The app leaves demo mode once `QRCLAIM_CONTRACT` is set.
 
 ### Vercel env
 | Var | Server/Client | Notes |

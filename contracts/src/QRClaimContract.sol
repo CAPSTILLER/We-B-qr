@@ -5,33 +5,26 @@ interface IERC20 {
     function transfer(address to, uint256 amount) external returns (bool);
     function balanceOf(address a) external view returns (uint256);
 }
-/// GearVault: approved operator pays any recipient (<= maxDispense, <= dailyCap)
 interface IERC721Balance { function balanceOf(address owner) external view returns (uint256); }
-interface IGearVault { function dispense(address recipient, uint256 amount) external; }
-/// CAPHVault: approved game pays any recipient with a unique ref
-interface ICaphVault { function payout(address to, uint256 amount, bytes32 ref) external; }
 
 /// @title QRClaimContract - refillable multi-token QR claim slots for Cap
 /// @notice Owner (Cap's Ledger) sets every rule. The signer key can only authorize claims (EIP-712).
-///         Funds arrive by direct transfer or by pulling from Ledger-approved vaults. Only the owner withdraws.
+///         Tokens enter ONLY by plain transfers (any wallet, or a vault operator calling the vault to send here).
+///         The contract never pulls from vaults. Only the owner withdraws.
 contract QRClaimContract {
-    enum VaultKind { None, GearVault, CaphVault }
-    struct Vault { address token; VaultKind kind; }
     struct Slot { address token; uint128 balance; uint64 epoch; bool retired; }
 
     address public owner;
     address public signer;
     address public refiller;
-    /// Team NFT (CAPs Mind). Holders may refill from float, pull from approved vaults, and retire slots.
+    /// Team NFT (CAPs Mind). Holders may only refill slots from unassigned float and retire slots.
     address public teamNft = 0x00635CA44339C7c194eF5bc87Bf2cd6df04a666D;
     bool public paused;
 
     mapping(address => bool) public allowedToken;
-    mapping(address => Vault) public vaults;
     mapping(address => uint256) public assigned; // token => sum of slot balances
     mapping(bytes32 => Slot) public slots;       // slotKey = keccak256(randomId)
     mapping(uint256 => bool) public nonceUsed;
-    uint256 private pullNonce;
 
     bytes32 public immutable DOMAIN_SEPARATOR;
     bytes32 public constant CLAIM_TYPEHASH = keccak256(
@@ -43,15 +36,13 @@ contract QRClaimContract {
     event RefillerChanged(address refiller);
     event TeamNftChanged(address nft);
     event TokenAllowed(address token, bool allowed);
-    event VaultSet(address vault, address token, VaultKind kind);
-    event Pulled(address vault, address token, uint256 amount);
     event Refilled(bytes32 indexed slot, address token, uint256 amount, uint64 epoch);
     event Retired(bytes32 indexed slot, uint256 returned);
     event Claimed(bytes32 indexed slot, address indexed to, address token, uint256 amount, uint64 epoch, uint256 nonce);
     event Paused(bool paused);
     event Withdrawn(address token, address to, uint256 amount);
 
-    error NotOwner(); error NotRefiller(); error IsPaused(); error TokenNotAllowed(); error BadVault();
+    error NotOwner(); error NotRefiller(); error IsPaused(); error TokenNotAllowed();
     error Insufficient(); error BadSig(); error Expired(); error NonceUsed(); error WrongEpoch();
     error SlotRetired(); error TokenMismatch(); error Length(); error TransferFailed(); error Zero(); error AllowedToken();
 
@@ -80,23 +71,10 @@ contract QRClaimContract {
     function setTeamNft(address n) external onlyOwner { teamNft = n; emit TeamNftChanged(n); }
     function setPaused(bool p) external onlyOwner { paused = p; emit Paused(p); }
     function setTokenAllowed(address t, bool a) external onlyOwner { allowedToken[t] = a; emit TokenAllowed(t, a); }
-    function setVault(address v, address token, VaultKind kind) external onlyOwner {
-        if (kind != VaultKind.None && !allowedToken[token]) revert TokenNotAllowed();
-        vaults[v] = Vault(token, kind); emit VaultSet(v, token, kind);
-    }
 
     // ---------------- funding ----------------
     /// Unassigned float of a token = balance held - balances assigned to slots.
     function float(address token) public view returns (uint256) { return IERC20(token).balanceOf(address(this)) - assigned[token]; }
-
-    /// Pull from an approved vault into this contract (vault limits apply).
-    function pullFromVault(address v, uint256 amount) external onlyRefiller {
-        Vault memory vt = vaults[v];
-        if (vt.kind == VaultKind.GearVault) IGearVault(v).dispense(address(this), amount);
-        else if (vt.kind == VaultKind.CaphVault) ICaphVault(v).payout(address(this), amount, keccak256(abi.encode(address(this), ++pullNonce)));
-        else revert BadVault();
-        emit Pulled(v, vt.token, amount);
-    }
 
     /// Assign float to slots and start a new epoch for each (old signed auths die).
     function refill(bytes32[] calldata keys, address token, uint128[] calldata amounts) external onlyRefiller {
