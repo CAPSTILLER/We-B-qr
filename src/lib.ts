@@ -15,6 +15,9 @@ export const GEAR_COLORS: Record<string, string> = {
   canary: "#FFFF99", chartreuse: "#CCFF00", emerald: "#50C878", turquoise: "#30D5BC",
   base: "#0000FF", sapphire: "#0F52BA", amethyst: "#9966CC", orchid: "#9D00D4",
 };
+/** Gear Hub lore extras: Master badge pink (CURSOR-BRIEF) + Forged gold (chatRules LINE_GOLD). */
+export const MASTER_COLORS: Record<string, string> = { master: "#FFC5FF", forged: "#FFD700" };
+export const LORE_COLORS: Record<string, string> = { ...GEAR_COLORS, ...MASTER_COLORS };
 
 export function rawAmount(amount: string, token: TokenId): bigint {
   return parseUnits(amount || "0", TOKENS[token].decimals);

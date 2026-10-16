@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { CAP, GEAR_COLORS, TOKENS, contrast, eip681, payLink, qrSvg, type ModuleShape, type TokenId } from "./lib";
+import { CAP, GEAR_COLORS, LORE_COLORS, TOKENS, contrast, eip681, payLink, qrSvg, type ModuleShape, type TokenId } from "./lib";
 import { Nav } from "./Nav";
 
 export function download(svg: string, name: string, png: boolean) {
@@ -15,10 +15,13 @@ export function download(svg: string, name: string, png: boolean) {
 }
 function save(url: string, name: string) { const a = document.createElement("a"); a.href = url; a.download = name; a.click(); }
 
+const G = GEAR_COLORS;
 const PRESETS: Record<string, string[]> = {
-  Gear: ["#EAA221"], Base: ["#0000FF"], Rainbow: Object.values(GEAR_COLORS), Fire: ["#DC143C", "#F28500", "#FFBF00"],
-  Ocean: ["#30D5BC", "#0F52BA"], Royal: ["#9D00D4", "#0000FF"], Ink: ["#000000"],
+  "All 12 Gears": Object.values(G), Master: [LORE_COLORS.master, G.orchid], Forged: [LORE_COLORS.forged, G.marigold, G.crimson],
+  Crimson: [G.crimson], Base: [G.base], "Crimson→Base": [G.crimson, G.base], "Sapphire→Turquoise": [G.sapphire, G.turquoise],
+  "Amethyst→Orchid": [G.amethyst, G.orchid], "Emerald→Chartreuse": [G.emerald, G.chartreuse], Ink: ["#000000"],
 };
+const cap = (n: string) => n[0].toUpperCase() + n.slice(1);
 
 export function Studio() {
   const [mode, setMode] = useState<"link" | "pay">("pay");
@@ -63,8 +66,8 @@ export function Studio() {
     <div className="muted" style={{ marginTop: 8 }}>{payload}</div>
     <div className="card">
       <label>Modules</label><div className="seg">{(["gear", "dot", "rounded", "square"] as ModuleShape[]).map((s) => <button key={s} className={shape === s ? "on" : ""} onClick={() => setShape(s)}>{s}</button>)}</div>
-      <label>Gear colors (tap 2+ for a gradient)</label>
-      <div className="sw">{Object.entries(GEAR_COLORS).map(([n, c]) => <i key={n} title={n} style={{ background: c }} className={colors.includes(c) ? "on" : ""} onClick={() => toggle(c)} />)}<i title="black" style={{ background: "#000" }} className={colors.includes("#000000") ? "on" : ""} onClick={() => toggle("#000000")} /></div>
+      <label>Gear lore colors (tap 2+ for a gradient)</label>
+      <div className="sw">{Object.entries(LORE_COLORS).map(([n, c]) => <i key={n} title={`${cap(n)} ${c}`} style={{ background: c }} className={colors.includes(c) ? "on" : ""} onClick={() => toggle(c)} />)}<i title="black" style={{ background: "#000" }} className={colors.includes("#000000") ? "on" : ""} onClick={() => toggle("#000000")} /></div>
       <div className="seg" style={{ marginTop: 8 }}>{Object.entries(PRESETS).map(([n, c]) => <button key={n} onClick={() => setColors(c)}>{n}</button>)}</div>
       <div className="row"><div><label>Background</label><input type="color" value={bg} onChange={(e) => setBg(e.target.value)} style={{ height: 44 }} /></div>
         <div><label>Center logo</label><select value={logo} onChange={(e) => setLogo(e.target.value as any)}><option value="GEAR">GEAR gear</option><option value="CAPH">CAPH gear</option><option value="image">My image</option><option value="none">None</option></select></div></div>
