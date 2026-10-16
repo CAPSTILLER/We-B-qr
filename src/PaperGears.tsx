@@ -14,7 +14,7 @@ function gearOutline(color: string, inner: string, label: string, sub: string) {
 }
 
 export function PaperGears() {
-  const [kind, setKind] = useState<"PAY" | "CLAIM">("CLAIM");
+  const [kind, setKind] = useState<"PAY" | "CLAIM">("PAY");
   const [count, setCount] = useState(9);
   const [amt, setAmt] = useState("5");
   const [token, setToken] = useState<TokenId>("USDC");
@@ -40,7 +40,7 @@ export function PaperGears() {
   };
   return (<div className="wrap"><Nav on="/paper" />
     <div className="card noprint">
-      <div className="seg"><button className={kind === "CLAIM" ? "on" : ""} onClick={() => setKind("CLAIM")}>🎁 Claim cards</button><button className={kind === "PAY" ? "on" : ""} onClick={() => setKind("PAY")}>💸 Pay cards</button></div>
+      <p className="muted">💸 Pay cards. Claim codes now live in <a style={{ color: "#EAA221" }} href="/claim-admin">QR Claim admin</a>.</p>
       <div className="row"><div><label>Amount</label><input value={amt} inputMode="decimal" onChange={(e) => setAmt(e.target.value.replace(/[^0-9.]/g, ""))} /></div>
         <div><label>Cards</label><input type="number" value={count} onChange={(e) => setCount(+e.target.value || 1)} /></div>
         {kind === "CLAIM" ? <div><label>First #</label><input type="number" value={startId} onChange={(e) => setStartId(+e.target.value || 1)} /></div>

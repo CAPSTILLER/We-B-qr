@@ -1,1 +1,1 @@
-interface ImportMetaEnv { VITE_VOUCHER_CONTRACT?: string }
+interface ImportMetaEnv { VITE_QRCLAIM_CONTRACT?: string }

@@ -54,15 +54,3 @@ export async function pay(provider: EIP1193Provider, token: TokenId, to: `0x${st
   return hash;
 }
 
-export const voucherAbi = [
-  { type: "function", name: "claim", stateMutability: "nonpayable", inputs: [{ name: "id", type: "uint256" }, { name: "secret", type: "bytes32" }, { name: "to", type: "address" }], outputs: [] },
-  { type: "function", name: "vouchers", stateMutability: "view", inputs: [{ name: "id", type: "uint256" }], outputs: [{ name: "hash", type: "bytes32" }, { name: "amount", type: "uint128" }, { name: "status", type: "uint8" }] },
-] as const;
-
-export async function claimVoucher(provider: EIP1193Provider, contract: `0x${string}`, id: bigint, secret: `0x${string}`) {
-  const [from] = (await provider.request({ method: "eth_requestAccounts" })) as `0x${string}`[];
-  const chain = await provider.request({ method: "eth_chainId" });
-  if (Number(chain) !== 8453) await provider.request({ method: "wallet_switchEthereumChain", params: [{ chainId: "0x2105" }] });
-  const data = encodeFunctionData({ abi: voucherAbi, functionName: "claim", args: [id, secret, from] });
-  return (await provider.request({ method: "eth_sendTransaction", params: [{ from, to: contract, data } as any] })) as `0x${string}`;
-}
