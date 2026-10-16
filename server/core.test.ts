@@ -13,7 +13,7 @@ const chain: Chain = {
   verifyLogin: async (_a, _m, sig) => sig === "0xgood",
   capsMindBalance: async (a) => (a.toLowerCase() === TM ? 1n : 0n),
   primaryBasename: async (a) => basenames[a.toLowerCase()] ?? null,
-  slot: async () => null, signClaim: async () => null, claimedBefore: async () => false, claimTx: async () => null,
+  slot: async () => null, gateBalance: async (_g, a) => (a.toLowerCase() === W2 ? 1n : 0n), signClaim: async () => null, claimedBefore: async () => false, claimTx: async () => null,
 };
 const owner = { authorization: "Bearer " + makeSession(OWNER, "owner") };
 const mate = { authorization: "Bearer " + makeSession(TM, "teammate") };
@@ -33,13 +33,25 @@ describe("QR claim server", () => {
     expect((await call({ action: "state" })).status).toBe(401);
     const f: any = await call({ action: "saveFolder", folder: { name: "Street drops" } }, mate);
     expect(f.status).toBe(200);
-    expect((await call({ action: "createCode", code: { name: "x" } }, mate)).status).toBe(403);
+    const tc: any = await call({ action: "createCode", code: { name: "Mate code", kind: "digital", token: "CAPH", amount: "2", unlockWindowH: 6, dailyCap: 2, gate: W, links: [{ label: "Hub", url: "https://hub.gearup.wtf" }] } }, mate);
+    expect(tc.status).toBe(200); expect(tc.json).toMatchObject({ token: "CAPH", basenameOnly: true, dailyCap: 2, gate: W, createdRole: "teammate" });
+    expect((await call({ action: "createCode", code: { name: "x", token: "0x4444444444444444444444444444444444444444" } }, mate)).status).toBe(403);
+    for (const a of ["updateCode", "retire", "rotate", "refill", "setAllowedTokens", "audit"]) expect((await call({ action: a, id: tc.json.id, ids: [tc.json.id], code: { name: "y" }, tokens: [] }, mate)).status).toBe(403);
+    await call({ action: "setAllowedTokens", tokens: ["0x4444444444444444444444444444444444444444"] }, owner);
+    expect((await call({ action: "createCode", code: { name: "x", token: "0x4444444444444444444444444444444444444444" } }, mate)).status).toBe(200);
+    const au: any = await call({ action: "audit" }, owner);
+    expect(au.json.some((x: any) => x.action === "teammate_create_code" && x.actor === TM)).toBe(true);
     const c: any = await call({ action: "createCode", code: { name: "Gear #1", folderId: f.json.id, kind: "paper" } }, owner);
     expect(c.status).toBe(200);
     expect((await call({ action: "move", ids: [c.json.id], folderId: "bot-grab" }, mate)).status).toBe(200);
+    // gate: only holders (W2) pass
+    const g: any = (await call({ action: "createCode", code: { name: "Gated", kind: "paper", unlockWindowH: 0, gate: TM } }, owner)).json;
+    await call({ action: "refill", ids: [g.id] }, owner);
+    expect((await call({ action: "prepare", id: g.id, wallet: W })).status).toBe(403);
+    expect((await call({ action: "prepare", id: g.id, wallet: W2 })).status).toBe(200);
     expect((await call({ action: "refill", ids: [c.json.id] }, mate)).status).toBe(403);
     const st: any = await call({ action: "state" }, mate);
-    expect(st.json.codes[0].folderId).toBe("bot-grab");
+    expect(st.json.codes.find((x: any) => x.id === c.json.id).folderId).toBe("bot-grab");
     expect(st.json.folders.some((x: any) => x.name === "Bot grab")).toBe(true);
   });
   it("codes: random unguessable IDs, no sequential URL, up to 3 https links", async () => {

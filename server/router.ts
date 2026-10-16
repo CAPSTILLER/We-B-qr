@@ -4,8 +4,8 @@ import { HttpError, QrClaim, readSession, type Chain } from "./core.js";
 import { getStore } from "./store.js";
 import { realChain } from "./chain.js";
 
-const OWNER_ONLY = new Set(["createCode", "updateCode", "refill", "retire", "rotate", "audit", "resolveAlert"]);
-const STAFF = new Set(["state", "code", "saveFolder", "deleteFolder", "move", "logPrint", ...OWNER_ONLY]);
+const OWNER_ONLY = new Set(["updateCode", "setAllowedTokens", "refill", "retire", "rotate", "audit", "resolveAlert"]);
+const STAFF = new Set(["createCode", "state", "code", "saveFolder", "deleteFolder", "move", "logPrint", ...OWNER_ONLY]);
 let chainOverride: Chain | null = null;
 export const setChainForTests = (c: Chain | null) => { chainOverride = c; };
 
@@ -36,7 +36,8 @@ export async function handle(body: any, headers: Record<string, string | undefin
       case "deleteFolder": json = await q.deleteFolder(actor, body.id); break;
       case "move": json = await q.move(actor, body.ids, body.folderId); break;
       case "logPrint": json = await q.logPrint(actor, body.ids); break;
-      case "createCode": json = await q.createCode(actor, body.code); break;
+      case "createCode": json = await q.createCode(actor, body.code, sess!.r); break;
+      case "setAllowedTokens": json = await q.setAllowedTokens(actor, body.tokens); break;
       case "updateCode": json = await q.updateCode(actor, body.id, body.code); break;
       case "refill": json = await q.refill(actor, body.ids); break;
       case "retire": json = await q.retire(actor, body.id); break;

@@ -19,7 +19,7 @@ export interface Code {
   id: string; serial: number; name: string; folderId: string;
   token: string; amount: string; kind: "digital" | "paper";
   basenameOnly: boolean; unlockWindowH: number; dailyCap: number;
-  links: Link[]; status: "active" | "retired";
+  links: Link[]; status: "active" | "retired"; gate?: string; createdBy?: string; createdRole?: Role;
   filled: boolean; refilledAt: number; unlockAt: number;
   claims: number; lastClaimAt: number; createdAt: number; rotatedTo?: string;
 }
@@ -34,6 +34,7 @@ export interface Chain {
   signClaim(m: { slot: `0x${string}`; token: `0x${string}`; to: `0x${string}`; amount: bigint; epoch: bigint; nonce: bigint; deadline: bigint }): Promise<`0x${string}` | null>;
   slotKey(id: string): `0x${string}`;
   claimedBefore(key: `0x${string}`, to: `0x${string}`): Promise<boolean>; // onchain Claimed(slot,to) logs
+  gateBalance(gate: `0x${string}`, wallet: `0x${string}`): Promise<bigint>;
   claimTx(tx: `0x${string}`): Promise<{ key: string; to: string } | null>;
   contract: string | null;
 }
@@ -106,7 +107,7 @@ export class QrClaim {
     const [folders, codes, alerts] = await Promise.all([this.s.hgetall<Folder>("folders"), this.s.hgetall<Code>("codes"), this.s.lrange<Alert>("alerts", 200)]);
     if (!folders[BOT_FOLDER]) { folders[BOT_FOLDER] = { id: BOT_FOLDER, name: "Bot grab" }; await this.s.hset("folders", BOT_FOLDER, folders[BOT_FOLDER]); }
     await this.audit(actor, "view_list", [], String(Object.keys(codes).length));
-    return { role, folders: Object.values(folders), codes: Object.values(codes).sort((a, b) => a.serial - b.serial), alerts, contract: this.c.contract };
+    return { role, allowedTokens: await this.allowedTokens(), folders: Object.values(folders), codes: Object.values(codes).sort((a, b) => a.serial - b.serial), alerts, contract: this.c.contract };
   }
   async codeDetail(actor: string, id: string) {
     const c = await this.code(id); if (!c) throw new HttpError(404, "No such code");
@@ -148,8 +149,10 @@ export class QrClaim {
       return { label: l.label.trim().slice(0, 30), url: url.slice(0, 300) };
     });
     const kind = (input.kind ?? base?.kind ?? "digital") as Code["kind"];
+    const gate = (input.gate ?? base?.gate ?? "").trim();
+    if (gate && !isAddr(gate)) throw new HttpError(400, "Gate must be a 0x NFT/token contract");
     return {
-      name, token, amount, kind, links,
+      name, token, amount, kind, links, gate: gate || undefined, createdBy: base?.createdBy, createdRole: base?.createdRole,
       folderId: input.folderId ?? base?.folderId ?? "",
       basenameOnly: input.basenameOnly ?? base?.basenameOnly ?? kind === "digital",
       unlockWindowH: Math.max(0, Math.min(720, Number(input.unlockWindowH ?? base?.unlockWindowH ?? 24))),
@@ -158,10 +161,19 @@ export class QrClaim {
       claims: base?.claims ?? 0, lastClaimAt: base?.lastClaimAt ?? 0, rotatedTo: base?.rotatedTo,
     };
   }
-  async createCode(actor: string, input: Partial<Code>) {
+  /** Ledger-managed allowed tokens: GEAR + CAPH always, plus owner-added 0x addresses. */
+  async allowedTokens(): Promise<string[]> { return [...Object.keys(TOKENS), ...((await this.s.get<string[]>("allowedTokens")) ?? [])]; }
+  async setAllowedTokens(actor: string, tokens: string[]) {
+    const list = [...new Set((tokens ?? []).map((t) => t.trim().toLowerCase()).filter(isAddr))];
+    await this.s.set("allowedTokens", list); await this.audit(actor, "set_allowed_tokens", [], list.join(",")); return { tokens: await this.allowedTokens() };
+  }
+  async createCode(actor: string, input: Partial<Code>, role: Role = "owner") {
+    const allowed = (await this.allowedTokens()).map((t) => t.toLowerCase());
+    const tok = String(input.token ?? "GEAR").trim();
+    if (role !== "owner" && !allowed.includes(tok.toLowerCase())) throw new HttpError(403, "Teammates can only pick a token from the Ledger's allowed list");
     const serial = await this.s.incr("serial");
-    const c: Code = { ...this.clean(input), id: newId(), serial, createdAt: now() };
-    await this.s.hset("codes", c.id, c); await this.audit(actor, "create_code", [c.id], c.name); return c;
+    const c: Code = { ...this.clean(input), id: newId(), serial, createdAt: now(), createdBy: actor, createdRole: role };
+    await this.s.hset("codes", c.id, c); await this.audit(actor, role === "owner" ? "create_code" : "teammate_create_code", [c.id], `${c.name} · ${c.amount} ${c.token}`); return c;
   }
   async updateCode(actor: string, id: string, input: Partial<Code>) {
     const base = await this.code(id); if (!base) throw new HttpError(404, "No such code");
@@ -223,6 +235,7 @@ export class QrClaim {
       name = (await this.c.primaryBasename(wallet)) ?? undefined;
       if (!name) throw new HttpError(403, "This code needs a primary Basename (name.base.eth) set on this wallet");
     }
+    if (c.gate && (await this.c.gateBalance(c.gate as `0x${string}`, wallet)) === 0n) throw new HttpError(403, "This code is for holders of a gate NFT/token");
     const dk = `wd:${w}:${day()}`;
     const used = (await this.s.get<number>(dk)) ?? 0;
     if (used >= c.dailyCap) { await this.alert(id, "daily_cap", `${w} hit ${c.dailyCap}/day`); throw new HttpError(429, "Daily claim limit reached for this wallet"); }

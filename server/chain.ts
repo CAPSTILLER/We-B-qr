@@ -21,6 +21,7 @@ export function realChain(): Chain {
     contract,
     slotKey: (id) => keccak256(toBytes(id)),
     verifyLogin: (address, message, signature) => client.verifyMessage({ address, message, signature }), // EOA + smart wallets (1271/6492)
+    gateBalance: (g, a) => client.readContract({ address: g, abi, functionName: "balanceOf", args: [a] }).catch(() => 0n),
     capsMindBalance: (a) => client.readContract({ address: CAPS_MIND, abi, functionName: "balanceOf", args: [a] }),
     async primaryBasename(a) {
       try {

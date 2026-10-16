@@ -9,7 +9,7 @@ QR modes: "Pay page" works with any phone camera. "Wallet app (EIP-681)" encodes
 `ethereum:<token>@8453/transfer?address=<to>&uint256=<raw>` for in-wallet scanners (needs a 0x address).
 
 ## QR Claim system (separate section)
-- `/claim-admin`: admin. The owner Ledger `0xD8382719b8fF90eE3Dd521B9d7c5dc23E8e4EAca` sets all rules. Holders of the CAPs Mind NFT (ERC-721 `0x00635ca44339c7c194ef5bc87bf2cd6df04a666d`, checked with balanceOf at sign-in) can view, print and organize only. Login is one free wallet signature (EOA or smart wallet), and the session lasts 12 h.
+- `/claim-admin`: admin. The owner Ledger `0xD8382719b8fF90eE3Dd521B9d7c5dc23E8e4EAca` sets all rules. CAPs Mind NFT holders (ERC-721 `0x00635ca44339c7c194ef5bc87bf2cd6df04a666d`, checked at sign-in) can create codes (tokens only from the Ledger allowed list) and view, print and organize. Only the Ledger edits settings after creation, refills, retires, rotates, changes allowed tokens, pauses or withdraws. Teammate creations are audit-logged. Optional per-code gate: live balanceOf check at claim time (snapshot mode not built yet). Login is one free wallet signature (EOA or smart wallet), and the session lasts 12 h.
 - `/c/<randomId>`: scan card with up to 3 link buttons plus Claim. Empty, locked and retired codes still show the buttons, with "Claim empty". IDs are random 128-bit values, and serials appear only in admin.
 - API: `POST /api/qrclaim {action}` (Vercel function, `server/`). Storage is Upstash Redis with keys prefixed `qrclaim:`.
 - No codes are pre-generated. Cap creates and names each one (name, folder, token GEAR/CAPH/allowlisted address, amount, unlock window, wallet claims/day, paper/digital, Basename-only, 3 links).

@@ -6,7 +6,7 @@ import { GEAR_COLORS, LORE_COLORS, qrSvg } from "../lib";
 type Link = { label: string; url: string };
 type Code = { id: string; serial: number; name: string; folderId: string; token: string; amount: string; kind: "digital" | "paper"; basenameOnly: boolean; unlockWindowH: number; dailyCap: number; links: Link[]; status: string; filled: boolean; unlockAt: number; claims: number; lastClaimAt: number };
 type Folder = { id: string; name: string; defaults?: any };
-type State = { role: "owner" | "teammate"; me: string; folders: Folder[]; codes: Code[]; alerts: any[]; contract: string | null; persistent: boolean };
+type State = { allowedTokens: string[]; role: "owner" | "teammate"; me: string; folders: Folder[]; codes: Code[]; alerts: any[]; contract: string | null; persistent: boolean };
 const TOKEN_ADDR: Record<string, `0x${string}`> = { GEAR: "0x5880cD05605A549f1DAb01a53ca61Ee559244bD1", CAPH: "0x1d1bcd1459259429accde23e24e1782f83e97ba3" };
 const DEC: Record<string, number> = { GEAR: 6, CAPH: 18 };
 const raw = (a: string, d: number) => { const [w, f = ""] = a.split("."); return BigInt(w || "0") * 10n ** BigInt(d) + BigInt((f + "0".repeat(d)).slice(0, d) || "0"); };
@@ -53,7 +53,7 @@ export function AdminPage() {
       {!st.persistent && <div className="warn">Storage not connected (Upstash env missing). Data resets on redeploy.</div>}
       {err && <p className="warn" onClick={() => setErr("")}>{err} ✕</p>}
       <div className="nav">
-        {(["codes", ...(owner ? ["new"] : []), "alerts", ...(owner ? ["audit"] : [])] as const).map((v) => <a key={v} className={view === v ? "on" : ""} onClick={() => setView(v as any)}>{v === "new" ? "+ New code" : v === "codes" ? `Codes (${st.codes.length})` : v === "alerts" ? `Alerts (${st.alerts.length})` : "Audit"}</a>)}
+        {(["codes", "new", "alerts", ...(owner ? ["audit"] : [])] as const).map((v) => <a key={v} className={view === v ? "on" : ""} onClick={() => setView(v as any)}>{v === "new" ? "+ New code" : v === "codes" ? `Codes (${st.codes.length})` : v === "alerts" ? `Alerts (${st.alerts.length})` : "Audit"}</a>)}
       </div>
     </div>
     {view === "codes" && <>
@@ -70,7 +70,8 @@ export function AdminPage() {
         <select onChange={(e) => { if (e.target.value) run(api("move", { ids: sel, folderId: e.target.value }).then(() => setSel([]))); }} defaultValue=""><option value="">Move {sel.length} to…</option>{st.folders.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}</select>
         {owner && <RefillButton ids={sel} st={st} done={() => { setSel([]); load(); }} onErr={setErr} />}
       </div>}
-      {shown.length === 0 && <p className="muted">No codes here yet.{owner ? " Tap “+ New code” to create and name one." : ""}</p>}
+      {owner && <p className="muted">Allowed tokens: {st.allowedTokens.map((t) => (t.startsWith("0x") ? short(t) : t)).join(", ")} · <a style={{ color: "#EAA221" }} onClick={() => { const v = prompt("Extra allowed token addresses (comma separated). GEAR + CAPH are always allowed.", st.allowedTokens.filter((t) => t.startsWith("0x")).join(",")); if (v !== null) run(api("setAllowedTokens", { tokens: v.split(",") })); }}>edit</a></p>}
+      {shown.length === 0 && <p className="muted">No codes here yet. Tap “+ New code” to create and name one.</p>}
       {shown.map((c) => (
         <div key={c.id} className="card" style={{ display: "flex", gap: 10, alignItems: "center", padding: 10, borderLeft: `4px solid ${c.folderId === "bot-grab" ? "#DC143C" : c.token === "CAPH" ? LORE_COLORS.master : "#EAA221"}` }}>
           <input type="checkbox" style={{ width: 22 }} checked={sel.includes(c.id)} onChange={(e) => setSel(e.target.checked ? [...sel, c.id] : sel.filter((x) => x !== c.id))} />
@@ -79,7 +80,7 @@ export function AdminPage() {
           <div style={{ textAlign: "right", fontSize: 13 }}><div className={c.status !== "active" ? "warn" : c.filled ? "ok" : "muted"}>{c.status !== "active" ? "retired" : c.filled ? (Date.now() < c.unlockAt ? "locked" : "ready") : "empty"}</div><div className="muted">{c.claims} claims</div></div>
         </div>))}
     </>}
-    {view === "new" && owner && <CodeForm st={st} onSaved={(c) => { load(); setView({ id: c.id }); }} onErr={setErr} />}
+    {view === "new" && <CodeForm st={st} onSaved={(c) => { load(); setView({ id: c.id }); }} onErr={setErr} />}
     {typeof view === "object" && <CodeDetail id={view.id} st={st} back={() => { setView("codes"); load(); }} onErr={setErr} />}
     {view === "alerts" && <div>{st.alerts.length === 0 && <p className="muted">No bot alerts yet.</p>}{st.alerts.map((a) => {
       const c = st.codes.find((x) => x.id === a.codeId);
@@ -112,8 +113,8 @@ function CodeForm({ st, onSaved, onErr, edit }: { st: State; onSaved: (c: Code) 
   return (<div className="card">
     <label>Code name</label><input value={f.name} placeholder="e.g. Coffee shop gear #1" onChange={(e) => set("name", e.target.value)} />
     <label>Folder</label><select value={f.folderId} onChange={(e) => set("folderId", e.target.value)}><option value="">Unfiled</option>{st.folders.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}</select>
-    <label>Token</label><div className="seg">{["GEAR", "CAPH"].map((t) => <button key={t} className={f.token === t ? "on" : ""} onClick={() => set("token", t)}>{t}</button>)}</div>
-    <input style={{ marginTop: 6 }} placeholder="or allowlisted token 0x…" value={["GEAR", "CAPH"].includes(f.token) ? "" : f.token} onChange={(e) => set("token", e.target.value.trim() || "GEAR")} />
+    <label>Token (Ledger's allowed list)</label><div className="seg">{st.allowedTokens.map((t) => <button key={t} className={f.token === t ? "on" : ""} onClick={() => set("token", t)}>{t.startsWith("0x") ? short(t) : t}</button>)}</div>
+    {st.role === "owner" && <input style={{ marginTop: 6 }} placeholder="owner: other token 0x…" value={st.allowedTokens.includes(f.token) ? "" : f.token} onChange={(e) => set("token", e.target.value.trim() || "GEAR")} />}
     <div className="row"><div><label>Amount per claim</label><input inputMode="decimal" value={f.amount} onChange={(e) => set("amount", e.target.value.replace(/[^0-9.]/g, ""))} /></div>
       <div><label>Unlock window (h)</label><input type="number" value={f.unlockWindowH} onChange={(e) => set("unlockWindowH", +e.target.value)} /></div>
       <div><label>Wallet claims/day</label><input type="number" value={f.dailyCap} onChange={(e) => set("dailyCap", +e.target.value)} /></div></div>
@@ -121,8 +122,10 @@ function CodeForm({ st, onSaved, onErr, edit }: { st: State; onSaved: (c: Code) 
       <button className={f.kind === "paper" ? "on" : ""} onClick={() => setF((o: any) => ({ ...o, kind: "paper", basenameOnly: false }))}>🧾 Paper</button>
       <button className={f.kind === "digital" ? "on" : ""} onClick={() => setF((o: any) => ({ ...o, kind: "digital", basenameOnly: true }))}>📱 Digital</button>
       <button className={f.basenameOnly ? "on" : ""} onClick={() => set("basenameOnly", !f.basenameOnly)}>Basename only: {f.basenameOnly ? "on" : "off"}</button></div>
+    <label>Gate (optional: only holders of this NFT/token contract can claim)</label><input placeholder="0x… gate contract" value={f.gate ?? ""} onChange={(e) => set("gate", e.target.value.trim())} />
     <label>Link buttons on the card (up to 3)</label>
     {links.map((l, i) => <div className="row" key={i} style={{ marginBottom: 6 }}><input placeholder={`Button ${i + 1} label`} value={l.label} onChange={(e) => setLink(i, "label", e.target.value)} /><input placeholder="https://…" value={l.url} onChange={(e) => setLink(i, "url", e.target.value)} /></div>)}
+    {!edit && st.role !== "owner" && <p className="warn">Teammate: settings are locked after you create the code. Only the Ledger can edit, refill, retire or rotate it.</p>}
     <p className="muted">Each claim: once per wallet per code. Empty until you refill; refill unlocks at a random time inside the window.</p>
     <button className="big" onClick={save}>{edit ? "Save rules" : "Create code"}</button>
   </div>);
@@ -149,7 +152,8 @@ function CodeDetail({ id, st, back, onErr }: { id: string; st: State; back: () =
   return (<div>
     <p className="noprint"><a style={{ color: "#EAA221" }} onClick={back}>← Codes</a></p>
     <div className="card noprint"><h2 style={{ margin: 0 }}>#{c.serial} {c.name}</h2>
-      <p className="muted">{c.amount} {c.token} · {c.kind} · Basename {c.basenameOnly ? "on" : "off"} · unlock ≤{c.unlockWindowH}h · {c.dailyCap}/day · {c.status}</p>
+      {(c as any).createdRole === "teammate" && <p className="muted">Created by teammate {short((c as any).createdBy ?? "")}</p>}
+      <p className="muted">{c.amount} {c.token} · {c.kind}{(c as any).gate ? ` · gate ${short((c as any).gate)}` : ""} · Basename {c.basenameOnly ? "on" : "off"} · unlock ≤{c.unlockWindowH}h · {c.dailyCap}/day · {c.status}</p>
       <p className="muted">Claims {c.claims} · last {when(c.lastClaimAt)} · median refill→claim {secs.length ? Math.round(secs.sort((a: number, b: number) => a - b)[secs.length >> 1] / 60) + " min" : "—"}</p>
       {c.links.map((l) => <div key={l.url} className="muted">🔗 {l.label}: {l.url}</div>)}
       <div className="seg" style={{ marginTop: 10 }}>
