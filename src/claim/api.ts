@@ -37,3 +37,16 @@ export function claimData(a: any, sig: `0x${string}`) {
   return encodeFunctionData({ abi: CONTRACT_ABI, functionName: "claim", args: [a.slot, a.token, a.to, BigInt(a.amount), BigInt(a.epoch), BigInt(a.nonce), BigInt(a.deadline), sig] });
 }
 export const short = (a: string) => a.slice(0, 6) + "…" + a.slice(-4);
+
+/** Turn wallet/RPC errors into plain words. */
+export function humanError(e: any): string {
+  const code = e?.code ?? e?.cause?.code;
+  const m = String(e?.shortMessage ?? e?.message ?? e ?? "");
+  if (code === 4001 || /reject|denied|cancel/i.test(m)) return "You cancelled in your wallet. Tap again when ready.";
+  if (code === -32002 || /already pending/i.test(m)) return "Your wallet already has a request open. Open the wallet app and finish or close it.";
+  if (code === 4100 || /unauthorized/i.test(m)) return "Your wallet didn't allow this site. Open the wallet and connect payup.gearup.wtf.";
+  if (/popup|blocked|window/i.test(m)) return "The wallet popup was blocked. Allow popups for this site, or open this page inside your wallet app's browser.";
+  if (/Failed to fetch|NetworkError|Server unreachable/i.test(m)) return "Can't reach the server. Check your connection and try again.";
+  if (e?.status) return m; // already a human message from our server
+  return m.length > 160 ? "Something went wrong in the wallet. Try again, or open this page inside your wallet app." : m || "Something went wrong. Try again.";
+}

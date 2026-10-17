@@ -51,8 +51,9 @@ export function toRaw(amount: string, decimals: number): bigint {
 
 // ---------------- sessions ----------------
 function secret() {
-  const s = process.env.QRCLAIM_SESSION_SECRET ?? (process.env.CLAIM_SIGNER_KEY ? "k:" + process.env.CLAIM_SIGNER_KEY : null);
-  if (!s) { if (process.env.VERCEL_ENV === "production") throw new HttpError(500, "Set QRCLAIM_SESSION_SECRET"); return "dev-only-secret"; }
+  const clean = (n: string) => process.env[n]?.trim().replace(/^['"]|['"]$/g, "").trim() || null;
+  const s = clean("QRCLAIM_SESSION_SECRET") ?? (clean("CLAIM_SIGNER_KEY") ? "k:" + clean("CLAIM_SIGNER_KEY") : null);
+  if (!s) { if (process.env.VERCEL_ENV === "production") throw new HttpError(503, "Admin sign-in isn't set up yet (QRCLAIM_SESSION_SECRET missing on Vercel)."); return "dev-only-secret"; }
   return createHmac("sha256", "qrclaim-session").update(s).digest();
 }
 export function makeSession(address: string, role: Role, hours = 12) {
@@ -91,13 +92,13 @@ export class QrClaim {
   }
   async login(address: `0x${string}`, sig: `0x${string}`) {
     const n = await this.s.get<string>(`nonce:${address.toLowerCase()}`);
-    if (!n) throw new HttpError(401, "Login expired, try again");
+    if (!n) throw new HttpError(401, "Sign-in timed out. Tap Connect again.");
     await this.s.del(`nonce:${address.toLowerCase()}`);
-    if (!(await this.c.verifyLogin(address, loginMessage(address, n), sig))) throw new HttpError(401, "Signature check failed");
+    if (!(await this.c.verifyLogin(address, loginMessage(address, n), sig))) throw new HttpError(401, "Signature didn't match this wallet. Tap Connect and try again.");
     let role: Role;
     if (address.toLowerCase() === OWNER) role = "owner";
     else if ((await this.c.capsMindBalance(address)) > 0n) role = "teammate";
-    else throw new HttpError(403, "This wallet is not the owner Ledger and holds no CAPs Mind NFT");
+    else throw new HttpError(403, "This wallet isn't the owner Ledger and doesn't hold a CAPs Mind NFT on Base. Switch to a wallet that holds one.");
     await this.audit(address.toLowerCase(), "login", [], role);
     return { token: makeSession(address, role), role };
   }

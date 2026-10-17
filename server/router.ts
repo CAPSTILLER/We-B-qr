@@ -1,8 +1,8 @@
 // One HTTP entry for all QR Claim actions: POST /api/qrclaim {action, ...}
 import { createHash } from "node:crypto";
 import { HttpError, QrClaim, readSession, type Chain } from "./core.js";
-import { getStore } from "./store.js";
-import { realChain } from "./chain.js";
+import { getStore, ConfigError, envClean } from "./store.js";
+import { realChain, signerAccount } from "./chain.js";
 
 const OWNER_ONLY = new Set(["updateCode", "setAllowedTokens", "rotate", "audit", "resolveAlert"]);
 const STAFF = new Set(["createCode", "refill", "retire", "state", "code", "saveFolder", "deleteFolder", "move", "logPrint", ...OWNER_ONLY]);
@@ -11,6 +11,13 @@ export const setChainForTests = (c: Chain | null) => { chainOverride = c; };
 
 export async function handle(body: any, headers: Record<string, string | undefined>): Promise<{ status: number; json: unknown }> {
   try {
+    const a0 = String(body?.action ?? "");
+    if (a0 === "health") {
+      // Non-secret config check: which settings are present/valid (never values)
+      let storage = "memory (not saved)";
+      try { const { store, persistent } = getStore(); if (persistent) { await store.get("health"); storage = "upstash ok"; } } catch (e: any) { storage = "error: " + (e instanceof ConfigError ? e.message : "can't reach Upstash"); }
+      return { status: 200, json: { storage, sessionSecret: !!envClean("QRCLAIM_SESSION_SECRET"), signer: envClean("CLAIM_SIGNER_KEY") ? (signerAccount() ? "ok" : "invalid") : "missing", contract: !!envClean("QRCLAIM_CONTRACT") } };
+    }
     const { store, persistent } = getStore();
     const chain = chainOverride ?? realChain();
     const q = new QrClaim(store, chain);
@@ -59,6 +66,8 @@ export async function handle(body: any, headers: Record<string, string | undefin
     return { status: 200, json };
   } catch (e: any) {
     if (e instanceof HttpError) return { status: e.status, json: { error: e.message } };
+    if (e instanceof ConfigError) return { status: 503, json: { error: "Server setup problem: " + e.message } };
+    if (/upstash|redis|fetch failed|WRONGPASS|unauthorized/i.test(String(e?.message))) return { status: 503, json: { error: "Server storage (Upstash) isn't reachable. Check the Upstash URL/token on Vercel." } };
     console.error("qrclaim error", e?.message);
     return { status: 500, json: { error: "Server error" } };
   }

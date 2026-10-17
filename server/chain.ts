@@ -1,8 +1,9 @@
 // Real Base chain adapter (server-only). Reads env; never logs secrets.
-import { createPublicClient, http, keccak256, toBytes, parseAbi, parseAbiItem, decodeEventLog, toCoinType } from "viem";
+import { createPublicClient, http, fallback, keccak256, toBytes, parseAbi, parseAbiItem, decodeEventLog, toCoinType } from "viem";
 import { base, mainnet } from "viem/chains";
 import { privateKeyToAccount } from "viem/accounts";
-import { CAPS_MIND, type Chain } from "./core.js";
+import { CAPS_MIND, HttpError, type Chain } from "./core.js";
+import { envClean } from "./store.js";
 
 const abi = parseAbi([
   "function slots(bytes32) view returns (address token, uint128 balance, uint64 epoch, bool retired)",
@@ -11,12 +12,13 @@ const abi = parseAbi([
 const claimedEvent = parseAbiItem("event Claimed(bytes32 indexed slot, address indexed to, address token, uint256 amount, uint64 epoch, uint256 nonce)");
 
 export function realChain(): Chain {
-  const client = createPublicClient({ chain: base, transport: http(process.env.BASE_RPC_URL) });
-  const eth = createPublicClient({ chain: mainnet, transport: http(process.env.MAINNET_RPC_URL) });
-  const contract = (process.env.QRCLAIM_CONTRACT || process.env.VITE_QRCLAIM_CONTRACT || null) as `0x${string}` | null;
-  const pk = process.env.CLAIM_SIGNER_KEY as `0x${string}` | undefined;
-  const account = pk ? privateKeyToAccount(pk) : null;
-  const fromBlock = BigInt(process.env.QRCLAIM_FROM_BLOCK ?? "0");
+  const rpc = (u: string | undefined, d: string[]) => fallback([...(u ? [http(u)] : []), ...d.map((x) => http(x))]);
+  const client = createPublicClient({ chain: base, transport: rpc(envClean("BASE_RPC_URL"), ["https://mainnet.base.org", "https://base.llamarpc.com", "https://base-rpc.publicnode.com"]) });
+  const eth = createPublicClient({ chain: mainnet, transport: rpc(envClean("MAINNET_RPC_URL"), ["https://eth.llamarpc.com", "https://ethereum-rpc.publicnode.com", "https://cloudflare-eth.com"]) });
+  const c0 = envClean("QRCLAIM_CONTRACT") ?? envClean("VITE_QRCLAIM_CONTRACT");
+  const contract = (c0 && /^0x[0-9a-fA-F]{40}$/.test(c0) ? c0 : null) as `0x${string}` | null;
+  const account = signerAccount();
+  const fromBlock = BigInt(/^\d+$/.test(envClean("QRCLAIM_FROM_BLOCK") ?? "") ? envClean("QRCLAIM_FROM_BLOCK")! : "0");
   return {
     contract,
     slotKey: (id) => keccak256(toBytes(id)),
@@ -60,4 +62,12 @@ export function realChain(): Chain {
       return null;
     },
   };
+}
+
+/** Signer from CLAIM_SIGNER_KEY; tolerant of a missing 0x prefix, never throws (null = claims paused). */
+export function signerAccount() {
+  let k = envClean("CLAIM_SIGNER_KEY");
+  if (!k) return null;
+  if (!k.startsWith("0x")) k = "0x" + k;
+  try { return privateKeyToAccount(k as `0x${string}`); } catch { return null; }
 }

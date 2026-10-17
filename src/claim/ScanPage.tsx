@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, claimData, connect, sendTx, short } from "./api";
+import { api, claimData, connect, sendTx, short, humanError } from "./api";
 import { baseClient } from "../wallet";
 import { GEAR_COLORS } from "../lib";
 
@@ -22,7 +22,7 @@ export function ScanPage() {
     api("prepare", { id, wallet: me }).then(setAuth).catch((e) => setMsg(e.message));
   }, [me, card]);
 
-  const onConnect = () => { setMsg(""); connect().then(setMe).catch((e) => setMsg(e?.shortMessage ?? e?.message ?? "Cancelled")); };
+  const onConnect = () => { setMsg(""); connect().then(setMe).catch((e) => setMsg(humanError(e))); };
   const onClaim = () => {
     setMsg("");
     if (card!.demo) {
@@ -38,7 +38,7 @@ export function ScanPage() {
       if (r.status !== "success") throw new Error("Claim failed onchain (someone may have claimed first)");
       await api("confirm", { id, tx: h }).catch(() => {});
       setStep("done");
-    }).catch((e) => { setStep("idle"); setMsg(e?.shortMessage ?? e?.message ?? "Cancelled"); });
+    }).catch((e) => { setStep("idle"); setMsg(humanError(e)); });
   };
 
   const ring = `conic-gradient(${Object.values(GEAR_COLORS).join(",")},${GEAR_COLORS.crimson})`;

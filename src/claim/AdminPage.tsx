@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { encodeFunctionData } from "viem";
-import { api, connect, wallet, sendTx, short, CONTRACT_ABI } from "./api";
+import { encodeFunctionData, toHex } from "viem";
+import { api, connect, wallet, sendTx, short, humanError, CONTRACT_ABI } from "./api";
 import { GEAR_COLORS, LORE_COLORS, qrSvg } from "../lib";
 
 type Link = { label: string; url: string };
@@ -21,23 +21,27 @@ export function AdminPage() {
   const [folder, setFolder] = useState("all");
   const [sel, setSel] = useState<string[]>([]);
   const [view, setView] = useState<"codes" | "new" | "alerts" | "audit" | { id: string }>("codes");
-  const load = () => api<State>("state").then(setSt).catch((e) => { if (e.status === 401) localStorage.removeItem("qrclaim:session"); setErr(e.message); setSt(null); });
+  const load = () => api<State>("state").then(setSt).catch((e) => { if (e.status === 401) localStorage.removeItem("qrclaim:session"); setErr(humanError(e)); setSt(null); });
   useEffect(() => { if (localStorage.getItem("qrclaim:session")) load(); }, []);
 
-  const onConnect = () => connect().then(async (a) => { setMe(a); setMsgToSign((await api("nonce", { address: a })).message); }).catch((e) => setErr(e.message));
+  const onConnect = () => { setErr(""); connect().then(async (a) => { setMe(a); setMsgToSign((await api("nonce", { address: a })).message); }).catch((e) => setErr(humanError(e))); };
   const onSign = () => {
     setErr("");
-    (wallet().request({ method: "personal_sign", params: [msgToSign as any, me!] }) as Promise<`0x${string}`>)
+    (wallet().request({ method: "personal_sign", params: [toHex(msgToSign), me!] }) as Promise<`0x${string}`>)
       .then((signature) => api("login", { address: me, signature }))
       .then((r) => { localStorage.setItem("qrclaim:session", r.token); load(); })
-      .catch((e) => setErr(e?.shortMessage ?? e.message));
+      .catch((e) => setErr(humanError(e)));
   };
   const logout = () => { localStorage.removeItem("qrclaim:session"); setSt(null); setMe(null); setMsgToSign(""); };
 
   if (!st) return (<div className="wrap"><h1>QR <span>Claim</span> admin</h1>
-    <div className="card"><p className="muted">Owner Ledger sets rules. CAPs Mind NFT holders can view, print and organize. Connecting is read-only. Signing in is one free signature (no gas).</p>
+    <div className="card">
+      <p><b>For the owner Ledger or any CAPs Mind holder.</b></p>
+      <p className="muted">Connect shares your address only. Then sign in with one free signature (no gas). CAPs Mind holders can create, refill, retire, print and organize codes.</p>
       {!me ? <button className="big" onClick={onConnect}>Connect wallet</button>
-        : <><p className="muted">Connected {short(me)}</p><button className="big" disabled={!msgToSign} onClick={onSign}>Sign in (free)</button></>}
+        : <><p className="muted">Connected {short(me)}</p><button className="big" disabled={!msgToSign} onClick={onSign}>{msgToSign ? "Sign in (free)" : "Preparing…"}</button>
+          <button style={{ marginTop: 8, width: "100%" }} onClick={() => { setMe(null); setMsgToSign(""); setErr(""); }}>Use a different wallet</button></>}
+      <p className="muted" style={{ marginTop: 10 }}>On Android: works in Chrome (Base Account popup) or inside the Coinbase/Base app or MetaMask app browser.</p>
       {err && <p className="warn">{err}</p>}</div></div>);
 
   const owner = st.role === "owner";

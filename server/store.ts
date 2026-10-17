@@ -49,11 +49,21 @@ export function redisStore(url: string, token: string): Store {
   };
 }
 
+export class ConfigError extends Error {}
+/** Read an env var, trimming whitespace/newlines and stray quotes pasted into Vercel. */
+export function envClean(name: string): string | undefined {
+  const v = process.env[name]?.trim().replace(/^['"]|['"]$/g, "").trim();
+  return v ? v : undefined;
+}
 let cached: Store | null = null;
 export function getStore(): { store: Store; persistent: boolean } {
-  const url = process.env.UPSTASH_REDIS_REST_URL ?? process.env.KV_REST_API_URL;
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN ?? process.env.KV_REST_API_TOKEN;
-  if (url && token) { cached ??= redisStore(url, token); return { store: cached, persistent: true }; }
+  const url = envClean("UPSTASH_REDIS_REST_URL") ?? envClean("KV_REST_API_URL");
+  const token = envClean("UPSTASH_REDIS_REST_TOKEN") ?? envClean("KV_REST_API_TOKEN");
+  if (url && token) {
+    if (!/^https:\/\//.test(url)) throw new ConfigError("Storage setting UPSTASH_REDIS_REST_URL must start with https://");
+    try { cached ??= redisStore(url, token); } catch { throw new ConfigError("Storage settings (Upstash URL/token) look malformed"); }
+    return { store: cached, persistent: true };
+  }
   cached ??= memoryStore();
   return { store: cached, persistent: false };
 }
