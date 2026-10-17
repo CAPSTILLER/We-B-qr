@@ -12,7 +12,7 @@ const chain: Chain = {
   contract: null, slotKey: (id) => keccak256(toBytes(id)),
   verifyLogin: (address, message, signature) => verifyMessage({ address, message, signature }),
   capsMindBalance: async (a) => { if (rpcDown) { const { HttpError } = await import("./core"); throw new HttpError(503, "Couldn't reach Base to check CAPs Mind ownership. Try again in a moment."); } return a.toLowerCase() === holder.address.toLowerCase() ? 1n : 0n; },
-  gateBalance: async () => 0n, primaryBasename: async () => null, slot: async () => null, signClaim: async () => null, claimedBefore: async () => false, claimTx: async () => null,
+  gateBalance: async () => 0n, primaryBasename: async () => null, slot: async () => null, signClaim: async () => null, claimedBefore: async () => false, claimTx: async () => null, paused: async () => false, float: async () => 0n, refiller: async () => null, refillWallet: () => null, sendRefill: async () => "0x" as `0x${string}`,
 };
 beforeEach(() => { setStoreForTests(memoryStore()); setChainForTests(chain); rpcDown = false; });
 

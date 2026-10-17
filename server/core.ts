@@ -20,11 +20,12 @@ export interface Code {
   token: string; amount: string; kind: "digital" | "paper";
   basenameOnly: boolean; unlockWindowH: number; dailyCap: number;
   links: Link[]; status: "active" | "retired"; gate?: string; createdBy?: string; createdRole?: Role;
+  autoRefillMin?: number; lastAutoAt?: number;
   filled: boolean; refilledAt: number; unlockAt: number;
   claims: number; lastClaimAt: number; createdAt: number; rotatedTo?: string;
 }
 export interface ClaimRec { wallet: string; at: number; secsFromUnlock: number; status: "authorized" | "confirmed" | "demo"; tx?: string; name?: string }
-export interface Alert { id: string; codeId: string; kind: "instant" | "repeat_wallet" | "daily_cap" | "failed_burst"; detail: string; at: number; resolved?: boolean }
+export interface Alert { id: string; codeId: string; kind: "instant" | "repeat_wallet" | "daily_cap" | "failed_burst" | "pool_low" | "auto_refill"; detail: string; at: number; resolved?: boolean }
 
 export interface Chain {
   verifyLogin(address: `0x${string}`, message: string, sig: `0x${string}`): Promise<boolean>;
@@ -35,6 +36,11 @@ export interface Chain {
   slotKey(id: string): `0x${string}`;
   claimedBefore(key: `0x${string}`, to: `0x${string}`): Promise<boolean>; // onchain Claimed(slot,to) logs
   gateBalance(gate: `0x${string}`, wallet: `0x${string}`): Promise<bigint>;
+  paused(): Promise<boolean>;
+  float(token: `0x${string}`): Promise<bigint>;
+  refiller(): Promise<string | null>;               // onchain refiller address
+  refillWallet(): string | null;                    // address of REFILL_WALLET_KEY
+  sendRefill(token: `0x${string}`, keys: `0x${string}`[], amounts: bigint[]): Promise<`0x${string}`>;
   claimTx(tx: `0x${string}`): Promise<{ key: string; to: string } | null>;
   contract: string | null;
 }
@@ -186,14 +192,72 @@ export class QrClaim {
     await this.s.hset("codes", id, c); await this.audit(actor, "update_code", [id]); return c;
   }
   /** Marks a refill: random unlock inside the window. Onchain, the Ledger/refiller must also call refill(). */
+  tokenAddr(c: Code) { return (TOKENS[c.token]?.address ?? c.token) as `0x${string}`; }
+  /** Top-up per slot so a slot holds exactly one claim amount (never overfills). */
+  async topup(c: Code): Promise<bigint> {
+    const want = toRaw(c.amount, this.decimals(c));
+    const oc = await this.c.slot(this.c.slotKey(c.id));
+    if (!oc) return want;
+    if (oc.retired) return 0n;
+    return oc.balance >= want ? 0n : want - oc.balance;
+  }
   async refill(actor: string, ids: string[], role: Role = "owner") {
-    const out: Code[] = [];
+    const out: { id: string; slotKey: string; token: string; tokenAddress: string; amount: string; amountRaw: string }[] = [];
     for (const id of ids) {
       const c = await this.code(id); if (!c || c.status !== "active") continue;
+      const t = await this.topup(c);
       c.filled = true; c.refilledAt = now(); c.unlockAt = now() + rnd(c.unlockWindowH * 3600e3);
-      await this.s.hset("codes", id, c); out.push(c);
+      await this.s.hset("codes", id, c);
+      if (t > 0n) out.push({ id, slotKey: this.c.slotKey(id), token: c.token, tokenAddress: this.tokenAddr(c), amount: c.amount, amountRaw: t.toString() });
     }
-    await this.audit(actor, role === "owner" ? "refill" : "teammate_refill", ids); return { codes: out.map((c) => ({ id: c.id, slotKey: this.c.slotKey(c.id), token: c.token, amount: c.amount })) };
+    await this.audit(actor, role === "owner" ? "refill" : "teammate_refill", ids); return { codes: out };
+  }
+  async setAutoRefill(actor: string, ids: string[], minutes: number) {
+    const m = Math.round(Number(minutes) || 0);
+    if (m !== 0 && (m < 1 || m > 1440)) throw new HttpError(400, "Auto-refill interval must be 1 minute to 1 day (or off)");
+    for (const id of ids) { const c = await this.code(id); if (c) { c.autoRefillMin = m; await this.s.hset("codes", id, c); } }
+    await this.audit(actor, "set_auto_refill", ids, m ? `${m} min` : "off"); return { ok: true, minutes: m };
+  }
+  /** Cron: refill due, empty, active codes from the unassigned pool using the refill wallet. */
+  async autoRefill(minPoolUnits = 0) {
+    const report: any = { refilled: [] as string[], skipped: {} as Record<string, string> };
+    const codes = Object.values(await this.s.hgetall<Code>("codes")).filter((c) => c.status === "active" && (c.autoRefillMin ?? 0) > 0);
+    if (!codes.length) return { ...report, note: "no auto-refill codes" };
+    if (this.c.contract) {
+      if (!this.c.refillWallet()) return { ...report, error: "REFILL_WALLET_KEY not set" };
+      if ((await this.c.refiller())?.toLowerCase() !== this.c.refillWallet()!.toLowerCase()) return { ...report, error: "Refill wallet isn't approved onchain (Ledger: setRefiller)" };
+      if (await this.c.paused()) return { ...report, error: "contract paused" };
+    }
+    const due: Record<string, { c: Code; t: bigint }[]> = {};
+    for (const c of codes) {
+      if (c.folderId === BOT_FOLDER) { report.skipped[c.id] = "in Bot grab"; continue; }
+      if (now() < (c.lastAutoAt ?? 0) + c.autoRefillMin! * 60e3 - 5e3) { report.skipped[c.id] = "not due"; continue; }
+      const oc = await this.c.slot(this.c.slotKey(c.id));
+      const empty = oc ? oc.balance === 0n && !oc.retired : !c.filled;
+      if (!empty) { report.skipped[c.id] = "not empty"; continue; }
+      (due[this.tokenAddr(c)] ??= []).push({ c, t: toRaw(c.amount, this.decimals(c)) });
+    }
+    for (const [token, list] of Object.entries(due)) {
+      const need = list.reduce((a, x) => a + x.t, 0n);
+      const decimals = this.decimals(list[0].c);
+      const minPool = BigInt(Math.round(minPoolUnits)) * 10n ** BigInt(decimals);
+      let pick = list;
+      if (this.c.contract) {
+        const pool = await this.c.float(token as `0x${string}`);
+        let budget = pool > minPool ? pool - minPool : 0n;
+        pick = list.filter((x) => (budget >= x.t ? ((budget -= x.t), true) : false));
+        if (pick.length < list.length) await this.alert(list[0].c.id, "pool_low", `Pool low for ${list[0].c.token}: ${list.length - pick.length} auto-refills skipped (need ${need}, pool ${pool})`);
+        if (!pick.length) { list.forEach((x) => (report.skipped[x.c.id] = "pool low")); continue; }
+        report.tx ??= [];
+        report.tx.push(await this.c.sendRefill(token as `0x${string}`, pick.map((x) => this.c.slotKey(x.c.id)), pick.map((x) => x.t)));
+      }
+      for (const { c } of pick) {
+        c.filled = true; c.refilledAt = now(); c.lastAutoAt = now(); c.unlockAt = now() + rnd(c.unlockWindowH * 3600e3);
+        await this.s.hset("codes", c.id, c); report.refilled.push(c.id);
+      }
+    }
+    if (report.refilled.length) await this.audit("auto-refill", "auto_refill", report.refilled);
+    return report;
   }
   async retire(actor: string, id: string, role: Role = "owner") {
     const c = await this.code(id); if (!c) throw new HttpError(404, "No such code");

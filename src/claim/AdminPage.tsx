@@ -70,9 +70,11 @@ export function AdminPage() {
       {folder !== "all" && folder !== "bot-grab" && <div className="row" style={{ marginTop: 8 }}>
         <button onClick={() => { const n = prompt("Rename folder", fname(folder)); if (n) run(api("saveFolder", { folder: { id: folder, name: n } })); }}>Rename</button>
         <button onClick={() => run(api("deleteFolder", { id: folder }).then(() => setFolder("all")))}>Delete (if empty)</button></div>}
-      {sel.length > 0 && <div className="card row">
+      {shown.some((c) => c.status === "active") && <button style={{ marginTop: 8 }} onClick={() => setSel(sel.length ? [] : shown.filter((c) => c.status === "active").map((c) => c.id))}>{sel.length ? "Clear selection" : `Select all ${shown.filter((c) => c.status === "active").length} active`}</button>}
+      {sel.length > 0 && <div className="card row" style={{ flexWrap: "wrap" }}>
         <select onChange={(e) => { if (e.target.value) run(api("move", { ids: sel, folderId: e.target.value }).then(() => setSel([]))); }} defaultValue=""><option value="">Move {sel.length} to…</option>{st.folders.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}</select>
-        {<RefillButton ids={sel} st={st} done={() => { setSel([]); load(); }} onErr={setErr} />}
+        <RefillButton ids={sel} st={st} done={() => { setSel([]); load(); }} onErr={setErr} />
+        <AutoRefill ids={sel} done={() => { setSel([]); load(); }} onErr={setErr} />
       </div>}
       {owner && <p className="muted">Allowed tokens: {st.allowedTokens.map((t) => (t.startsWith("0x") ? short(t) : t)).join(", ")} · <a style={{ color: "#EAA221" }} onClick={() => { const v = prompt("Extra allowed token addresses (comma separated). GEAR + CAPH are always allowed.", st.allowedTokens.filter((t) => t.startsWith("0x")).join(",")); if (v !== null) run(api("setAllowedTokens", { tokens: v.split(",") })); }}>edit</a></p>}
       {shown.length === 0 && <p className="muted">No codes here yet. Tap “+ New code” to create and name one.</p>}
@@ -81,7 +83,7 @@ export function AdminPage() {
           <input type="checkbox" style={{ width: 22 }} checked={sel.includes(c.id)} onChange={(e) => setSel(e.target.checked ? [...sel, c.id] : sel.filter((x) => x !== c.id))} />
           <div style={{ flex: 1 }} onClick={() => setView({ id: c.id })}>
             <b>#{c.serial} {c.name}</b><div className="muted">{c.amount} {c.token} · {c.kind}{c.basenameOnly ? " · Basename" : ""} · {fname(c.folderId)}</div></div>
-          <div style={{ textAlign: "right", fontSize: 13 }}><div className={c.status !== "active" ? "warn" : c.filled ? "ok" : "muted"}>{c.status !== "active" ? "retired" : c.filled ? (Date.now() < c.unlockAt ? "locked" : "ready") : "empty"}</div><div className="muted">{c.claims} claims</div></div>
+          <div style={{ textAlign: "right", fontSize: 13 }}><div className={c.status !== "active" ? "warn" : c.filled ? "ok" : "muted"}>{c.status !== "active" ? "retired" : c.filled ? (Date.now() < c.unlockAt ? "locked" : "ready") : "empty"}</div><div className="muted">{c.claims} claims{(c as any).autoRefillMin ? ` · ⟳${(c as any).autoRefillMin}m` : ""}</div></div>
         </div>))}
     </>}
     {view === "new" && <CodeForm st={st} onSaved={(c) => { load(); setView({ id: c.id }); }} onErr={setErr} />}
@@ -97,15 +99,35 @@ export function AdminPage() {
 
 function RefillButton({ ids, st, done, onErr }: { ids: string[]; st: State; done: () => void; onErr: (e: string) => void }) {
   const [pending, setPending] = useState<any[] | null>(null);
-  const refill = () => api("refill", { ids }).then((r) => (st.contract ? setPending(r.codes) : done())).catch((e) => onErr(e.message));
-  const sendOnchain = () => {
+  const [busy, setBusy] = useState(false);
+  const refill = () => api("refill", { ids }).then((r) => (st.contract && r.codes.length ? setPending(r.codes) : done())).catch((e) => onErr(humanError(e)));
+  // One refill() call per token covers ALL selected slots (the contract's refill is a batch).
+  const sendOnchain = async () => {
     const byToken: Record<string, any[]> = {};
-    pending!.forEach((c) => (byToken[c.token] ??= []).push(c));
-    const [tok, list] = Object.entries(byToken)[0];
-    const data = encodeFunctionData({ abi: CONTRACT_ABI, functionName: "refill", args: [list.map((c) => c.slotKey), TOKEN_ADDR[tok] ?? tok, list.map((c) => raw(c.amount, DEC[tok] ?? 18))] });
-    sendTx(st.me as `0x${string}`, st.contract as `0x${string}`, data).then(() => { setPending(null); done(); }).catch((e) => onErr(e?.shortMessage ?? e.message));
+    pending!.forEach((c) => (byToken[c.tokenAddress] ??= []).push(c));
+    const calls = Object.entries(byToken).map(([tok, list]) => ({ to: st.contract as `0x${string}`, data: encodeFunctionData({ abi: CONTRACT_ABI, functionName: "refill", args: [list.map((c) => c.slotKey), tok as `0x${string}`, list.map((c) => BigInt(c.amountRaw))] }) }));
+    setBusy(true);
+    try {
+      if (calls.length === 1) await sendTx(st.me as `0x${string}`, calls[0].to, calls[0].data);
+      else {
+        try { // EIP-5792: one approval for several calls
+          await wallet().request({ method: "wallet_sendCalls" as any, params: [{ version: "2.0.0", chainId: "0x2105", from: st.me, atomicRequired: false, calls }] as any });
+        } catch (e: any) {
+          if (e?.code === 4001) throw e;
+          for (const c of calls) await sendTx(st.me as `0x${string}`, c.to, c.data); // fallback: one tx per token
+        }
+      }
+      setPending(null); done();
+    } catch (e) { onErr(humanError(e)); } finally { setBusy(false); }
   };
-  return pending ? <button className="on" onClick={sendOnchain}>Approve refill in wallet ({pending.length})</button> : <button onClick={refill}>Refill {ids.length}</button>;
+  return pending ? <button className="on" disabled={busy} onClick={sendOnchain}>{busy ? "Approve in wallet…" : `Approve refill of ${pending.length} in wallet (1 approval)`}</button> : <button onClick={refill}>Refill {ids.length > 1 ? `${ids.length} codes` : ""}</button>;
+}
+
+const INTERVALS: [number, string][] = [[0, "Off"], [1, "1 min"], [5, "5 min"], [15, "15 min"], [60, "1 hour"], [360, "6 hours"], [1440, "1 day"]];
+function AutoRefill({ ids, value, done, onErr }: { ids: string[]; value?: number; done: () => void; onErr: (e: string) => void }) {
+  return <select value={value ?? ""} onChange={(e) => { if (e.target.value !== "") api("setAutoRefill", { ids, minutes: +e.target.value }).then(done).catch((x) => onErr(humanError(x))); }}>
+    {value === undefined && <option value="">Auto-refill…</option>}
+    {INTERVALS.map(([m, l]) => <option key={m} value={m}>⟳ {l}</option>)}</select>;
 }
 
 function CodeForm({ st, onSaved, onErr, edit }: { st: State; onSaved: (c: Code) => void; onErr: (e: string) => void; edit?: Code }) {
@@ -164,6 +186,7 @@ function CodeDetail({ id, st, back, onErr }: { id: string; st: State; back: () =
         <button onClick={() => setShowQr(!showQr)}>{showQr ? "Hide QR" : "Show QR"}</button>
         {showQr && <button onClick={() => api("logPrint", { ids: [id] }).then(() => print())}>🖨 Print</button>}
         {c.status === "active" && <RefillButton ids={[id]} st={st} done={load} onErr={onErr} />}
+        {c.status === "active" && <AutoRefill ids={[id]} value={(c as any).autoRefillMin ?? 0} done={load} onErr={onErr} />}
         {owner && <button onClick={() => setEditing(true)}>Edit rules</button>}
         {owner && c.status === "active" && <button onClick={() => confirm("Rotate: new random link, old one dies?") && act("rotate")}>Rotate</button>}
         {c.status === "active" && <button onClick={() => confirm("Retire this code? Its balance goes back to the contract float.") && act("retire")}>Retire</button>}

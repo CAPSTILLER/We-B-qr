@@ -13,7 +13,7 @@ const chain: Chain = {
   verifyLogin: async (_a, _m, sig) => sig === "0xgood",
   capsMindBalance: async (a) => (a.toLowerCase() === TM ? 1n : 0n),
   primaryBasename: async (a) => basenames[a.toLowerCase()] ?? null,
-  slot: async () => null, gateBalance: async (_g, a) => (a.toLowerCase() === W2 ? 1n : 0n), signClaim: async () => null, claimedBefore: async () => false, claimTx: async () => null,
+  slot: async () => null, gateBalance: async (_g, a) => (a.toLowerCase() === W2 ? 1n : 0n), signClaim: async () => null, claimedBefore: async () => false, claimTx: async () => null, paused: async () => false, float: async () => 0n, refiller: async () => null, refillWallet: () => null, sendRefill: async () => "0x" as `0x${string}`,
 };
 const owner = { authorization: "Bearer " + makeSession(OWNER, "owner") };
 const mate = { authorization: "Bearer " + makeSession(TM, "teammate") };

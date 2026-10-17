@@ -49,3 +49,13 @@ Limitations: custom (non-GEAR/CAPH) token addresses are assumed to have 18 decim
 
 ## Dev
 `npm i && npm run dev`, `npm test` (QR decode tests with ZXing + jsQR, QR Claim server tests), `npm run build`.
+
+## Bulk refill + auto-refill
+- **Bulk refill:** select codes (or "Select all"), tap Refill, then approve once. The deployed contract's `refill(bytes32[] keys, address token, uint128[] amounts)` is already a batch and callable by the owner, the refiller or CAPs Mind holders. It refills only from the unassigned pool, and the server sends top-ups only, so slots never overfill. Mixed tokens produce one `refill` per token, sent as a single `wallet_sendCalls` (EIP-5792) batch, with a fallback of one tx per token.
+- **Auto-refill:** per code, an interval of off, 1/5/15 min, 1 h, 6 h or 1 day. Owner and teammates can set it. A cron calls `GET /api/qrclaim-cron` with `Authorization: Bearer $CRON_SECRET`. Each run refills only due, active codes whose onchain slot is empty and that aren't in Bot grab. It skips everything if the contract is paused or the refill wallet isn't the onchain `refiller`, keeps `AUTO_REFILL_MIN_POOL` tokens in reserve, and raises a `pool_low` alert when the pool runs short. Each due code also gets a new random unlock time inside its window.
+- Setup:
+  1. Make a fresh wallet. Put its private key in Vercel as `REFILL_WALLET_KEY` (server only) and send it about 0.002 ETH on Base for gas (a refill tx costs well under $0.01).
+  2. Ledger tx on `0x0f7b4359dc04bad4ec262a7fb25f675f31424fb9`: `setRefiller(<refill wallet address>)`. That wallet can only refill and retire.
+  3. Vercel env: `CRON_SECRET` (random), optional `AUTO_REFILL_MIN_POOL` (whole tokens kept in reserve).
+  4. Schedule. Vercel Hobby crons run at most once per day, so use **Upstash QStash**: create a schedule `* * * * *` to `https://payup.gearup.wtf/api/qrclaim-cron` with header `Upstash-Forward-Authorization: Bearer <CRON_SECRET>`. On Vercel Pro, a `vercel.json` cron at `* * * * *` on the same path works too.
+  5. Check: POST `{"action":"health"}` to `/api/qrclaim` shows `refillWallet` (address) and `cronSecret: true`.
