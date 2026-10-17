@@ -145,9 +145,13 @@ export class QrClaim {
     const token = (input.token ?? base?.token ?? "GEAR").trim();
     if (!TOKENS[token] && !isAddr(token)) throw new HttpError(400, "Token must be GEAR, CAPH or an allowlisted 0x address");
     const amount = String(input.amount ?? base?.amount ?? "1"); if (!/^\d+(\.\d+)?$/.test(amount) || Number(amount) <= 0) throw new HttpError(400, "Bad amount");
-    const links = (input.links ?? base?.links ?? []).filter((l) => l.label?.trim() && l.url?.trim()).slice(0, 3).map((l) => {
-      const url = l.url.trim(); if (!/^https:\/\//i.test(url)) throw new HttpError(400, `Link "${l.label}" must start with https://`);
-      return { label: l.label.trim().slice(0, 30), url: url.slice(0, 300) };
+    const links = (input.links ?? base?.links ?? []).filter((l) => l.url?.trim()).slice(0, 3).map((l) => {
+      let url = l.url.trim();
+      if (/^http:\/\//i.test(url)) url = "https://" + url.slice(7);
+      if (!/^[a-z][a-z0-9+.-]*:/i.test(url)) url = "https://" + url; // "x.com/cap" -> https://x.com/cap
+      let host = "";
+      try { const u = new URL(url); if (u.protocol !== "https:") throw 0; host = u.hostname.replace(/^www\./, ""); } catch { throw new HttpError(400, `Link "${l.label || l.url}" isn't a valid web address`); }
+      return { label: (l.label?.trim() || host).slice(0, 30), url: url.slice(0, 300) };
     });
     const kind = (input.kind ?? base?.kind ?? "digital") as Code["kind"];
     const gate = (input.gate ?? base?.gate ?? "").trim();
@@ -208,12 +212,12 @@ export class QrClaim {
   async resolveAlert(actor: string, alertId: string) { await this.audit(actor, "resolve_alert", [alertId]); return { ok: true }; }
 
   // ---- public ----
-  private async liveState(c: Code): Promise<"ready" | "empty" | "retired"> {
+  private async liveState(c: Code): Promise<"ready" | "locked" | "empty" | "retired"> {
     if (c.status !== "active") return "retired";
     const onchain = await this.c.slot(this.c.slotKey(c.id));
     const funded = onchain ? !onchain.retired && onchain.balance >= toRaw(c.amount, this.decimals(c)) : c.filled;
     if (!funded) return "empty";
-    return now() >= c.unlockAt ? "ready" : "empty"; // locked looks empty: no countdown to snipe
+    return now() >= c.unlockAt ? "ready" : "locked"; // "Refilling soon", never shows the unlock time
   }
   private decimals(c: Code) { return TOKENS[c.token]?.decimals ?? 18; }
   async card(id: string) {
@@ -228,7 +232,7 @@ export class QrClaim {
     const st = await this.liveState(c);
     if (st !== "ready") {
       if (ipHash && (await this.s.incr(`fail:${id}:${ipHash}`, 600)) === 10) await this.alert(id, "failed_burst", `10+ tries on an empty code from one device`);
-      throw new HttpError(409, st === "retired" ? "This code is retired" : "Empty right now. Check back later.");
+      throw new HttpError(409, st === "retired" ? "This code is retired" : st === "locked" ? "Refilling soon. Check back later." : "Empty. Check back later.");
     }
     if (await this.s.get(`wc:${id}:${w}`)) throw new HttpError(403, "This wallet already claimed this code");
     let name: string | undefined;

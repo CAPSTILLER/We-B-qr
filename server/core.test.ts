@@ -59,6 +59,8 @@ describe("QR claim server", () => {
     const a: any = await call({ action: "createCode", code: { name: "A", links: [1, 2, 3, 4].map((i) => ({ label: "L" + i, url: "https://x.y/" + i })) } }, owner);
     expect(a.json.id).toMatch(/^[A-Za-z0-9_-]{22}$/); expect(a.json.links.length).toBe(3); expect(a.json.serial).toBe(1);
     expect((await call({ action: "createCode", code: { name: "B", links: [{ label: "bad", url: "javascript:alert(1)" }] } }, owner)).status).toBe(400);
+    const b: any = await call({ action: "createCode", code: { name: "C", links: [{ label: "", url: "x.com/capstiller" }, { label: "Hub", url: "http://hub.gearup.wtf" }] } }, owner);
+    expect(b.json.links).toEqual([{ label: "x.com", url: "https://x.com/capstiller" }, { label: "Hub", url: "https://hub.gearup.wtf" }]);
     expect((await call({ action: "card", id: "1" })).status).toBe(404);
   });
   it("demo claim: empty until refill, once per wallet, unlock window, basename rule", async () => {
@@ -87,6 +89,7 @@ describe("QR claim server", () => {
   it("locked inside unlock window looks empty; retire and rotate", async () => {
     const c: any = (await call({ action: "createCode", code: { name: "Win", kind: "paper", unlockWindowH: 24 } }, owner)).json;
     await call({ action: "refill", ids: [c.id] }, owner);
+    expect((await call({ action: "card", id: c.id }) as any).json.state).toMatch(/locked|ready/);
     const r: any = await call({ action: "rotate", id: c.id }, owner);
     expect((await call({ action: "card", id: c.id }) as any).json.state).toBe("retired");
     expect(r.json.code.id).not.toBe(c.id);
