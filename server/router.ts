@@ -5,7 +5,7 @@ import { getStore, ConfigError, envClean } from "./store.js";
 import { realChain, signerAccount, keyAccount } from "./chain.js";
 
 const OWNER_ONLY = new Set(["updateCode", "setAllowedTokens", "rotate", "audit", "resolveAlert"]);
-const STAFF = new Set(["createCode", "refill", "retire", "setAutoRefill", "state", "code", "saveFolder", "deleteFolder", "move", "logPrint", ...OWNER_ONLY]);
+const STAFF = new Set(["createCode", "refill", "retire", "setAutoRefill", "fundFaucet", "state", "code", "saveFolder", "deleteFolder", "move", "logPrint", ...OWNER_ONLY]);
 let chainOverride: Chain | null = null;
 export const setChainForTests = (c: Chain | null) => { chainOverride = c; };
 
@@ -49,6 +49,7 @@ export async function handle(body: any, headers: Record<string, string | undefin
       case "refill": json = await q.refill(actor, body.ids, sess!.r); break;
       case "retire": json = await q.retire(actor, body.id, sess!.r); break;
       case "rotate": json = await q.rotate(actor, body.id); break;
+      case "fundFaucet": json = await q.fundFaucet(actor, body.id, body.amount, sess!.r); break;
       case "setAutoRefill": json = await q.setAutoRefill(actor, body.ids, body.minutes); break;
       case "audit": json = await q.auditLog(); break;
       case "resolveAlert": json = await q.resolveAlert(actor, body.id); break;

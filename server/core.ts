@@ -21,6 +21,7 @@ export interface Code {
   basenameOnly: boolean; unlockWindowH: number; dailyCap: number;
   links: Link[]; status: "active" | "retired"; gate?: string; createdBy?: string; createdRole?: Role;
   autoRefillMin?: number; lastAutoAt?: number;
+  mode?: "rotating" | "faucet"; perWalletHours?: number; totalCap?: number; fundAmount?: string; demoBalanceRaw?: string;
   filled: boolean; refilledAt: number; unlockAt: number;
   claims: number; lastClaimAt: number; createdAt: number; rotatedTo?: string;
 }
@@ -119,7 +120,14 @@ export class QrClaim {
   async codeDetail(actor: string, id: string) {
     const c = await this.code(id); if (!c) throw new HttpError(404, "No such code");
     await this.audit(actor, "view_code", [id]);
-    return { code: c, claims: await this.s.lrange<ClaimRec>(`claims:${id}`, 200), slotKey: this.c.slotKey(id) };
+    const claims = await this.s.lrange<ClaimRec>(`claims:${id}`, 500);
+    const oc = await this.c.slot(this.c.slotKey(id)).catch(() => null);
+    const balRaw = oc ? oc.balance : BigInt(c.demoBalanceRaw ?? "0");
+    const dec = this.decimals(c);
+    const remaining = (Number(balRaw) / 10 ** dec).toString();
+    const dayAgo = now() - 86400e3;
+    const stats = { remaining, claimsLeft: Math.floor(Number(balRaw) / Number(toRaw(c.amount, dec))), claims24h: claims.filter((x) => x.at > dayAgo).length, uniqueWallets: new Set(claims.map((x) => x.wallet)).size };
+    return { code: c, claims: claims.slice(0, 200), stats, slotKey: this.c.slotKey(id) };
   }
   async auditLog() { return this.s.lrange("audit", 300); }
   async logPrint(actor: string, ids: string[]) { await this.audit(actor, "print", ids); return { ok: true }; }
@@ -162,11 +170,18 @@ export class QrClaim {
     const kind = (input.kind ?? base?.kind ?? "digital") as Code["kind"];
     const gate = (input.gate ?? base?.gate ?? "").trim();
     if (gate && !isAddr(gate)) throw new HttpError(400, "Gate must be a 0x NFT/token contract");
+    const mode = (input.mode ?? base?.mode ?? "rotating") === "faucet" ? "faucet" : "rotating";
+    const fundAmount = String(input.fundAmount ?? base?.fundAmount ?? (mode === "faucet" ? String(Number(amount) * 25) : amount));
+    if (!/^\d+(\.\d+)?$/.test(fundAmount)) throw new HttpError(400, "Bad fund amount");
     return {
+      mode, fundAmount,
+      perWalletHours: Math.max(1, Math.min(720, Number(input.perWalletHours ?? base?.perWalletHours ?? 24))),
+      totalCap: Math.max(0, Math.floor(Number(input.totalCap ?? base?.totalCap ?? 0))),
+      demoBalanceRaw: base?.demoBalanceRaw, autoRefillMin: mode === "faucet" ? 0 : base?.autoRefillMin, lastAutoAt: base?.lastAutoAt,
       name, token, amount, kind, links, gate: gate || undefined, createdBy: base?.createdBy, createdRole: base?.createdRole,
       folderId: input.folderId ?? base?.folderId ?? "",
       basenameOnly: input.basenameOnly ?? base?.basenameOnly ?? kind === "digital",
-      unlockWindowH: Math.max(0, Math.min(720, Number(input.unlockWindowH ?? base?.unlockWindowH ?? 24))),
+      unlockWindowH: mode === "faucet" ? 0 : Math.max(0, Math.min(720, Number(input.unlockWindowH ?? base?.unlockWindowH ?? 24))),
       dailyCap: Math.max(1, Math.min(100, Number(input.dailyCap ?? base?.dailyCap ?? DEFAULT_DAILY_CAP))),
       status: base?.status ?? "active", filled: base?.filled ?? false, refilledAt: base?.refilledAt ?? 0, unlockAt: base?.unlockAt ?? 0,
       claims: base?.claims ?? 0, lastClaimAt: base?.lastClaimAt ?? 0, rotatedTo: base?.rotatedTo,
@@ -195,6 +210,7 @@ export class QrClaim {
   tokenAddr(c: Code) { return (TOKENS[c.token]?.address ?? c.token) as `0x${string}`; }
   /** Top-up per slot so a slot holds exactly one claim amount (never overfills). */
   async topup(c: Code): Promise<bigint> {
+    if (c.mode === "faucet") return toRaw(c.fundAmount ?? c.amount, this.decimals(c)); // faucet: add, never capped to one claim
     const want = toRaw(c.amount, this.decimals(c));
     const oc = await this.c.slot(this.c.slotKey(c.id));
     if (!oc) return want;
@@ -206,22 +222,34 @@ export class QrClaim {
     for (const id of ids) {
       const c = await this.code(id); if (!c || c.status !== "active") continue;
       const t = await this.topup(c);
-      c.filled = true; c.refilledAt = now(); c.unlockAt = now() + rnd(c.unlockWindowH * 3600e3);
+      c.filled = true; c.refilledAt = now(); c.unlockAt = c.mode === "faucet" ? 0 : now() + rnd(c.unlockWindowH * 3600e3);
+      if (c.mode === "faucet" && !this.c.contract) c.demoBalanceRaw = (BigInt(c.demoBalanceRaw ?? "0") + t).toString();
       await this.s.hset("codes", id, c);
       if (t > 0n) out.push({ id, slotKey: this.c.slotKey(id), token: c.token, tokenAddress: this.tokenAddr(c), amount: c.amount, amountRaw: t.toString() });
     }
     await this.audit(actor, role === "owner" ? "refill" : "teammate_refill", ids); return { codes: out };
   }
+  /** Fund a faucet with a specific amount (adds to the slot). */
+  async fundFaucet(actor: string, id: string, amount: string, role: Role) {
+    const c = await this.code(id); if (!c || c.status !== "active" || c.mode !== "faucet") throw new HttpError(400, "Not an active faucet code");
+    if (!/^\d+(\.\d+)?$/.test(String(amount)) || Number(amount) <= 0) throw new HttpError(400, "Bad amount");
+    const raw = toRaw(String(amount), this.decimals(c));
+    c.filled = true; c.refilledAt = now();
+    if (!this.c.contract) c.demoBalanceRaw = (BigInt(c.demoBalanceRaw ?? "0") + raw).toString();
+    await this.s.hset("codes", id, c);
+    await this.audit(actor, role === "owner" ? "fund_faucet" : "teammate_fund_faucet", [id], `${amount} ${c.token}`);
+    return { codes: [{ id, slotKey: this.c.slotKey(id), token: c.token, tokenAddress: this.tokenAddr(c), amount: String(amount), amountRaw: raw.toString() }] };
+  }
   async setAutoRefill(actor: string, ids: string[], minutes: number) {
     const m = Math.round(Number(minutes) || 0);
     if (m !== 0 && (m < 1 || m > 1440)) throw new HttpError(400, "Auto-refill interval must be 1 minute to 1 day (or off)");
-    for (const id of ids) { const c = await this.code(id); if (c) { c.autoRefillMin = m; await this.s.hset("codes", id, c); } }
+    for (const id of ids) { const c = await this.code(id); if (c && c.mode !== "faucet") { c.autoRefillMin = m; await this.s.hset("codes", id, c); } }
     await this.audit(actor, "set_auto_refill", ids, m ? `${m} min` : "off"); return { ok: true, minutes: m };
   }
   /** Cron: refill due, empty, active codes from the unassigned pool using the refill wallet. */
   async autoRefill(minPoolUnits = 0) {
     const report: any = { refilled: [] as string[], skipped: {} as Record<string, string> };
-    const codes = Object.values(await this.s.hgetall<Code>("codes")).filter((c) => c.status === "active" && (c.autoRefillMin ?? 0) > 0);
+    const codes = Object.values(await this.s.hgetall<Code>("codes")).filter((c) => c.status === "active" && c.mode !== "faucet" && (c.autoRefillMin ?? 0) > 0);
     if (!codes.length) return { ...report, note: "no auto-refill codes" };
     if (this.c.contract) {
       if (!this.c.refillWallet()) return { ...report, error: "REFILL_WALLET_KEY not set" };
@@ -278,6 +306,12 @@ export class QrClaim {
   // ---- public ----
   private async liveState(c: Code): Promise<"ready" | "locked" | "empty" | "retired"> {
     if (c.status !== "active") return "retired";
+    if (c.mode === "faucet") {
+      if (c.totalCap && c.claims >= c.totalCap) return "empty";
+      const oc = await this.c.slot(this.c.slotKey(c.id));
+      const bal = oc ? (oc.retired ? 0n : oc.balance) : BigInt(c.demoBalanceRaw ?? "0");
+      return bal >= toRaw(c.amount, this.decimals(c)) ? "ready" : "empty";
+    }
     const onchain = await this.c.slot(this.c.slotKey(c.id));
     const funded = onchain ? !onchain.retired && onchain.balance >= toRaw(c.amount, this.decimals(c)) : c.filled;
     if (!funded) return "empty";
@@ -287,7 +321,7 @@ export class QrClaim {
   async card(id: string) {
     const c = await this.code(id);
     if (!c) throw new HttpError(404, "This code isn't active"); // same reply as unknown: no enumeration hints
-    return { name: c.name, token: TOKENS[c.token] ? c.token : "TOKEN", amount: c.amount, links: c.links, state: await this.liveState(c), basenameOnly: c.basenameOnly, demo: !this.c.contract };
+    return { mode: c.mode ?? "rotating", perWalletHours: c.perWalletHours ?? 24, name: c.name, token: TOKENS[c.token] ? c.token : "TOKEN", amount: c.amount, links: c.links, state: await this.liveState(c), basenameOnly: c.basenameOnly, demo: !this.c.contract };
   }
   async prepare(id: string, wallet: `0x${string}`, ipHash = "") {
     if (!isAddr(wallet)) throw new HttpError(400, "Bad wallet");
@@ -298,7 +332,12 @@ export class QrClaim {
       if (ipHash && (await this.s.incr(`fail:${id}:${ipHash}`, 600)) === 10) await this.alert(id, "failed_burst", `10+ tries on an empty code from one device`);
       throw new HttpError(409, st === "retired" ? "This code is retired" : st === "locked" ? "Refilling soon. Check back later." : "Empty. Check back later.");
     }
-    if (await this.s.get(`wc:${id}:${w}`)) throw new HttpError(403, "This wallet already claimed this code");
+    const faucet = c.mode === "faucet";
+    if (faucet) {
+      const last = await this.s.get<number>(`fw:${id}:${w}`);
+      const wait = last ? last + (c.perWalletHours ?? 24) * 3600e3 - now() : 0;
+      if (wait > 0) throw new HttpError(429, `Already claimed. Come back in ${fmtWait(wait)}.`);
+    } else if (await this.s.get(`wc:${id}:${w}`)) throw new HttpError(403, "This wallet already claimed this code");
     let name: string | undefined;
     if (c.basenameOnly) {
       name = (await this.c.primaryBasename(wallet)) ?? undefined;
@@ -308,30 +347,32 @@ export class QrClaim {
     const dk = `wd:${w}:${day()}`;
     const used = (await this.s.get<number>(dk)) ?? 0;
     if (used >= c.dailyCap) { await this.alert(id, "daily_cap", `${w} hit ${c.dailyCap}/day`); throw new HttpError(429, "Daily claim limit reached for this wallet"); }
-    const secsFromUnlock = Math.round((now() - c.unlockAt) / 1000);
-    if (secsFromUnlock < INSTANT_SECS) await this.alert(id, "instant", `${w} claimed ${secsFromUnlock}s after unlock`);
+    const secsFromUnlock = Math.round((now() - (faucet ? c.refilledAt : c.unlockAt)) / 1000);
+    if (faucet) await this.s.set(`fw:${id}:${w}`, now(), (c.perWalletHours ?? 24) * 3600);
+    if (!faucet && secsFromUnlock < INSTANT_SECS) await this.alert(id, "instant", `${w} claimed ${secsFromUnlock}s after unlock`);
     const codesToday = await this.s.incr(`wcodes:${w}:${day()}`, 172800);
     if (codesToday === 5) await this.alert(id, "repeat_wallet", `${w} tried 5 codes today`);
 
     if (!this.c.contract) {
       // DEMO: record and empty the code, no tokens move
       await this.recordClaim(c, w, secsFromUnlock, "demo", undefined, name);
-      return { demo: true as const, name };
+      return { demo: true as const, name, comeBackHours: faucet ? c.perWalletHours ?? 24 : undefined };
     }
-    if (await this.c.claimedBefore(this.c.slotKey(id), wallet)) { await this.s.set(`wc:${id}:${w}`, 1); throw new HttpError(403, "This wallet already claimed this code"); }
+    if (!faucet && await this.c.claimedBefore(this.c.slotKey(id), wallet)) { await this.s.set(`wc:${id}:${w}`, 1); throw new HttpError(403, "This wallet already claimed this code"); }
     const onchain = (await this.c.slot(this.c.slotKey(id)))!;
     const token = (TOKENS[c.token]?.address ?? c.token) as `0x${string}`;
     const m = { slot: this.c.slotKey(id), token, to: wallet, amount: toRaw(c.amount, this.decimals(c)), epoch: onchain.epoch, nonce: BigInt("0x" + randomBytes(31).toString("hex")), deadline: BigInt(Math.floor(now() / 1000) + 600) };
     const sig = await this.c.signClaim(m); if (!sig) throw new HttpError(503, "Claims are paused (no signer key)");
     await this.s.incr(dk, 172800);
     await this.s.lpush(`claims:${id}`, { wallet: w, at: now(), secsFromUnlock, status: "authorized", name } satisfies ClaimRec, 500);
-    return { demo: false as const, contract: this.c.contract, args: { ...m, amount: m.amount.toString(), epoch: m.epoch.toString(), nonce: m.nonce.toString(), deadline: m.deadline.toString() }, sig, name };
+    return { comeBackHours: faucet ? c.perWalletHours ?? 24 : undefined, demo: false as const, contract: this.c.contract, args: { ...m, amount: m.amount.toString(), epoch: m.epoch.toString(), nonce: m.nonce.toString(), deadline: m.deadline.toString() }, sig, name };
   }
   private async recordClaim(c: Code, w: string, secsFromUnlock: number, status: ClaimRec["status"], tx?: string, name?: string) {
-    await this.s.set(`wc:${c.id}:${w}`, 1);
+    if (c.mode !== "faucet") await this.s.set(`wc:${c.id}:${w}`, 1);
     if (status === "demo") await this.s.incr(`wd:${w}:${day()}`, 172800);
+    if (c.mode === "faucet" && status === "demo") c.demoBalanceRaw = (BigInt(c.demoBalanceRaw ?? "0") - toRaw(c.amount, this.decimals(c))).toString();
     await this.s.lpush(`claims:${c.id}`, { wallet: w, at: now(), secsFromUnlock, status, tx, name } satisfies ClaimRec, 500);
-    c.claims += 1; c.lastClaimAt = now(); c.filled = false;
+    c.claims += 1; c.lastClaimAt = now(); if (c.mode !== "faucet") c.filled = false;
     await this.s.hset("codes", c.id, c);
   }
   /** Called after the wallet's claim tx confirms; router verifies the receipt's Claimed event first. */
@@ -340,4 +381,9 @@ export class QrClaim {
     await this.recordClaim(c, wallet.toLowerCase(), Math.round((now() - c.unlockAt) / 1000), "confirmed", tx);
     return { ok: true };
   }
+}
+
+export function fmtWait(ms: number) {
+  const h = Math.floor(ms / 3600e3), m = Math.ceil((ms % 3600e3) / 60e3);
+  return h >= 1 ? `${h}h${m && h < 6 ? ` ${m}m` : ""}` : `${m}m`;
 }

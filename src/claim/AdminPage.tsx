@@ -82,8 +82,8 @@ export function AdminPage() {
         <div key={c.id} className="card" style={{ display: "flex", gap: 10, alignItems: "center", padding: 10, borderLeft: `4px solid ${c.folderId === "bot-grab" ? "#DC143C" : c.token === "CAPH" ? LORE_COLORS.master : "#EAA221"}` }}>
           <input type="checkbox" style={{ width: 22 }} checked={sel.includes(c.id)} onChange={(e) => setSel(e.target.checked ? [...sel, c.id] : sel.filter((x) => x !== c.id))} />
           <div style={{ flex: 1 }} onClick={() => setView({ id: c.id })}>
-            <b>#{c.serial} {c.name}</b><div className="muted">{c.amount} {c.token} · {c.kind}{c.basenameOnly ? " · Basename" : ""} · {fname(c.folderId)}</div></div>
-          <div style={{ textAlign: "right", fontSize: 13 }}><div className={c.status !== "active" ? "warn" : c.filled ? "ok" : "muted"}>{c.status !== "active" ? "retired" : c.filled ? (Date.now() < c.unlockAt ? "locked" : "ready") : "empty"}</div><div className="muted">{c.claims} claims{(c as any).autoRefillMin ? ` · ⟳${(c as any).autoRefillMin}m` : ""}</div></div>
+            <b>#{c.serial} {(c as any).mode === "faucet" ? "🚰 " : ""}{c.name}</b><div className="muted">{c.amount} {c.token} · {c.kind}{c.basenameOnly ? " · Basename" : ""} · {fname(c.folderId)}</div></div>
+          <div style={{ textAlign: "right", fontSize: 13 }}><div className={c.status !== "active" ? "warn" : c.filled ? "ok" : "muted"}>{c.status !== "active" ? "retired" : (c as any).mode === "faucet" ? "faucet" : c.filled ? (Date.now() < c.unlockAt ? "locked" : "ready") : "empty"}</div><div className="muted">{c.claims} claims{(c as any).autoRefillMin ? ` · ⟳${(c as any).autoRefillMin}m` : ""}</div></div>
         </div>))}
     </>}
     {view === "new" && <CodeForm st={st} onSaved={(c) => { load(); setView({ id: c.id }); }} onErr={setErr} />}
@@ -123,6 +123,16 @@ function RefillButton({ ids, st, done, onErr }: { ids: string[]; st: State; done
   return pending ? <button className="on" disabled={busy} onClick={sendOnchain}>{busy ? "Approve in wallet…" : `Approve refill of ${pending.length} in wallet (1 approval)`}</button> : <button onClick={refill}>Refill {ids.length > 1 ? `${ids.length} codes` : ""}</button>;
 }
 
+function FundFaucet({ id, st, c, done, onErr }: { id: string; st: State; c: Code; done: () => void; onErr: (e: string) => void }) {
+  const [amt, setAmt] = useState((c as any).fundAmount ?? "25");
+  const [pending, setPending] = useState<any>(null);
+  const fund = () => api("fundFaucet", { id, amount: amt }).then((r) => (st.contract ? setPending(r.codes[0]) : done())).catch((e) => onErr(humanError(e)));
+  const send = () => sendTx(st.me as `0x${string}`, st.contract as `0x${string}`, encodeFunctionData({ abi: CONTRACT_ABI, functionName: "refill", args: [[pending.slotKey], pending.tokenAddress, [BigInt(pending.amountRaw)]] }))
+    .then(() => { setPending(null); done(); }).catch((e) => onErr(humanError(e)));
+  return <div className="row" style={{ marginTop: 8 }}><input inputMode="decimal" value={amt} onChange={(e) => setAmt(e.target.value.replace(/[^0-9.]/g, ""))} />
+    {pending ? <button className="on" onClick={send}>Approve fund {pending.amount} in wallet</button> : <button onClick={fund}>Fund faucet (+{amt} {c.token})</button>}</div>;
+}
+
 const INTERVALS: [number, string][] = [[0, "Off"], [1, "1 min"], [5, "5 min"], [15, "15 min"], [60, "1 hour"], [360, "6 hours"], [1440, "1 day"]];
 function AutoRefill({ ids, value, done, onErr }: { ids: string[]; value?: number; done: () => void; onErr: (e: string) => void }) {
   return <select value={value ?? ""} onChange={(e) => { if (e.target.value !== "") api("setAutoRefill", { ids, minutes: +e.target.value }).then(done).catch((x) => onErr(humanError(x))); }}>
@@ -141,8 +151,16 @@ function CodeForm({ st, onSaved, onErr, edit }: { st: State; onSaved: (c: Code) 
     <label>Folder</label><select value={f.folderId} onChange={(e) => set("folderId", e.target.value)}><option value="">Unfiled</option>{st.folders.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}</select>
     <label>Token (Ledger's allowed list)</label><div className="seg">{st.allowedTokens.map((t) => <button key={t} className={f.token === t ? "on" : ""} onClick={() => set("token", t)}>{t.startsWith("0x") ? short(t) : t}</button>)}</div>
     {st.role === "owner" && <input style={{ marginTop: 6 }} placeholder="owner: other token 0x…" value={st.allowedTokens.includes(f.token) ? "" : f.token} onChange={(e) => set("token", e.target.value.trim() || "GEAR")} />}
+    <label>Mode</label><div className="seg">
+      <button className={(f.mode ?? "rotating") === "rotating" ? "on" : ""} onClick={() => set("mode", "rotating")}>🔁 Rotating</button>
+      <button className={f.mode === "faucet" ? "on" : ""} onClick={() => setF((o: any) => ({ ...o, mode: "faucet", basenameOnly: true, fundAmount: o.fundAmount ?? String(Number(o.amount || 1) * 25) }))}>🚰 Faucet (daily claim)</button></div>
+    {f.mode === "faucet" && <p className="muted">Faucet: always claimable. Each wallet can claim once per period. Fund it with many claims' worth. Basename-only or a gate is recommended.</p>}
+    {f.mode === "faucet" && <div className="row">
+      <div><label>Hours between claims (per wallet)</label><input type="number" value={f.perWalletHours ?? 24} onChange={(e) => set("perWalletHours", +e.target.value)} /></div>
+      <div><label>Total claim cap (0 = none)</label><input type="number" value={f.totalCap ?? 0} onChange={(e) => set("totalCap", +e.target.value)} /></div>
+      <div><label>Refill adds</label><input inputMode="decimal" value={f.fundAmount ?? ""} onChange={(e) => set("fundAmount", e.target.value.replace(/[^0-9.]/g, ""))} /></div></div>}
     <div className="row"><div><label>Amount per claim</label><input inputMode="decimal" value={f.amount} onChange={(e) => set("amount", e.target.value.replace(/[^0-9.]/g, ""))} /></div>
-      <div><label>Unlock window (h)</label><input type="number" value={f.unlockWindowH} onChange={(e) => set("unlockWindowH", +e.target.value)} /></div>
+      {f.mode !== "faucet" && <div><label>Unlock window (h)</label><input type="number" value={f.unlockWindowH} onChange={(e) => set("unlockWindowH", +e.target.value)} /></div>}
       <div><label>Wallet claims/day</label><input type="number" value={f.dailyCap} onChange={(e) => set("dailyCap", +e.target.value)} /></div></div>
     <label>Type</label><div className="seg">
       <button className={f.kind === "paper" ? "on" : ""} onClick={() => setF((o: any) => ({ ...o, kind: "paper", basenameOnly: false }))}>🧾 Paper</button>
@@ -181,12 +199,20 @@ function CodeDetail({ id, st, back, onErr }: { id: string; st: State; back: () =
       {(c as any).createdRole === "teammate" && <p className="muted">Created by teammate {short((c as any).createdBy ?? "")}</p>}
       <p className="muted">{c.amount} {c.token} · {c.kind}{(c as any).gate ? ` · gate ${short((c as any).gate)}` : ""} · Basename {c.basenameOnly ? "on" : "off"} · unlock ≤{c.unlockWindowH}h · {c.dailyCap}/day · {c.status}</p>
       <p className="muted">Claims {c.claims} · last {when(c.lastClaimAt)} · median refill→claim {secs.length ? Math.round(secs.sort((a: number, b: number) => a - b)[secs.length >> 1] / 60) + " min" : "—"}</p>
+      {(c as any).mode === "faucet" && <div className="card" style={{ background: "#0f0f12" }}>
+        <b>🚰 Faucet</b> · {c.amount} {c.token} per claim · each wallet every {(c as any).perWalletHours ?? 24}h{(c as any).totalCap ? ` · cap ${(c as any).totalCap}` : ""}
+        <div className="row" style={{ marginTop: 6, textAlign: "center" }}>
+          <div><div className="tok" style={{ fontSize: 26, margin: 0 }}>{d.stats.remaining}</div><div className="muted">{c.token} left ({d.stats.claimsLeft} claims)</div></div>
+          <div><div className="tok" style={{ fontSize: 26, margin: 0 }}>{d.stats.claims24h}</div><div className="muted">claims 24h</div></div>
+          <div><div className="tok" style={{ fontSize: 26, margin: 0 }}>{d.stats.uniqueWallets}</div><div className="muted">unique wallets</div></div></div>
+        {c.status === "active" && <FundFaucet id={id} st={st} c={c} done={load} onErr={onErr} />}
+      </div>}
       {c.links.map((l) => <div key={l.url} className="muted">🔗 {l.label}: {l.url}</div>)}
       <div className="seg" style={{ marginTop: 10 }}>
         <button onClick={() => setShowQr(!showQr)}>{showQr ? "Hide QR" : "Show QR"}</button>
         {showQr && <button onClick={() => api("logPrint", { ids: [id] }).then(() => print())}>🖨 Print</button>}
         {c.status === "active" && <RefillButton ids={[id]} st={st} done={load} onErr={onErr} />}
-        {c.status === "active" && <AutoRefill ids={[id]} value={(c as any).autoRefillMin ?? 0} done={load} onErr={onErr} />}
+        {c.status === "active" && (c as any).mode !== "faucet" && <AutoRefill ids={[id]} value={(c as any).autoRefillMin ?? 0} done={load} onErr={onErr} />}
         {owner && <button onClick={() => setEditing(true)}>Edit rules</button>}
         {owner && c.status === "active" && <button onClick={() => confirm("Rotate: new random link, old one dies?") && act("rotate")}>Rotate</button>}
         {c.status === "active" && <button onClick={() => confirm("Retire this code? Its balance goes back to the contract float.") && act("retire")}>Retire</button>}

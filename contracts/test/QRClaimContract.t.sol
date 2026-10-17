@@ -49,6 +49,17 @@ contract QRClaimTest is Test {
         bytes memory s2 = _sig(bob, 1e6, 1, 8, dl);
         vm.expectRevert(QRClaimContract.Insufficient.selector); c.claim(key, address(gear), bob, 1e6, 1, 8, dl, s2);
     }
+    function testFaucetManyClaimsOneSlot() public {
+        _refill(5e6); uint256 dl = block.timestamp + 600;
+        for (uint256 i = 1; i <= 5; i++) {
+            address w = address(uint160(0x1000 + i));
+            bytes32 sh = keccak256(abi.encode(c.CLAIM_TYPEHASH(), key, address(gear), w, 1e6, uint64(1), i, dl));
+            (uint8 v, bytes32 r, bytes32 s) = vm.sign(sk, keccak256(abi.encodePacked("\x19\x01", c.DOMAIN_SEPARATOR(), sh)));
+            c.claim(key, address(gear), w, 1e6, 1, i, dl, abi.encodePacked(r, s, v));
+            assertEq(gear.balanceOf(w), 1e6);
+        }
+        (, uint128 bal,,) = c.slots(key); assertEq(bal, 0);
+    }
     function testEpochKillsOldAuth() public {
         _refill(1e6); uint256 dl = block.timestamp + 600; bytes memory s = _sig(bob, 1e6, 1, 1, dl);
         _refill(1e6);

@@ -8,7 +8,7 @@ import { GEAR_COLORS } from "../lib";
 const INVITE_URL = "https://base.app/invite/capzero/FPR4HYZ0";
 const INVITE_CODE = "FPR4HYZ0";
 
-type Card = { name: string; token: string; amount: string; links: { label: string; url: string }[]; state: "ready" | "locked" | "empty" | "retired"; basenameOnly: boolean; demo: boolean };
+type Card = { mode?: "rotating" | "faucet"; perWalletHours?: number; name: string; token: string; amount: string; links: { label: string; url: string }[]; state: "ready" | "locked" | "empty" | "retired"; basenameOnly: boolean; demo: boolean };
 
 /** Detect only: never prompts. */
 function detectWallet(): EIP1193Provider | null {
@@ -26,6 +26,7 @@ export function ScanPage() {
   const [msg, setMsg] = useState("");
   const [tx, setTx] = useState("");
   const [copied, setCopied] = useState(false);
+  const [comeBack, setComeBack] = useState<number | null>(null);
   useEffect(() => { if (id) api<Card>("card", { id }).then(setCard).catch((e) => setErr(e.message)); else setErr("This code isn't active"); }, [id]);
   useEffect(() => { // wallets announce within a few ms (EIP-6963); check again shortly after load
     setProv(detectWallet());
@@ -40,6 +41,7 @@ export function ScanPage() {
     (prov.request({ method: "eth_requestAccounts" }) as Promise<`0x${string}`[]>).then(async ([addr]) => {
       setMe(addr);
       const auth: any = await api("prepare", { id, wallet: addr });
+      if (auth.comeBackHours) setComeBack(auth.comeBackHours);
       if (auth.demo) { setStep("done"); return; }
       if (Number(await prov.request({ method: "eth_chainId" })) !== 8453) await prov.request({ method: "wallet_switchEthereumChain", params: [{ chainId: "0x2105" }] });
       const h = (await prov.request({ method: "eth_sendTransaction", params: [{ from: addr, to: auth.contract, data: claimData(auth.args, auth.sig) } as any] })) as `0x${string}`;
@@ -57,18 +59,20 @@ export function ScanPage() {
   if (err) return <div className="wrap"><div className="card" style={{ textAlign: "center", marginTop: 60 }}><div style={{ fontSize: 48 }}>⚙</div><p>{err}</p></div></div>;
   if (!card) return <div className="wrap"><p className="muted" style={{ marginTop: 60, textAlign: "center" }}>Loading…</p></div>;
   const ready = card.state === "ready";
-  const status = card.state === "locked" ? "⏳ Refilling soon. Check back later." : card.state === "empty" ? "Empty. Check back later." : card.state === "retired" ? "This code is retired." : "";
+  const faucet = card.mode === "faucet";
+  const status = faucet && card.state === "empty" ? "Faucet is dry. Check back later." : card.state === "locked" ? "⏳ Refilling soon. Check back later." : card.state === "empty" ? "Empty. Check back later." : card.state === "retired" ? "This code is retired." : "";
   return (<div className="wrap">
     <div style={{ background: ring, padding: 3, borderRadius: 22, marginTop: 20 }}>
       <div style={{ background: "#111114", borderRadius: 20, padding: 18, textAlign: "center" }}>
         <div style={{ fontSize: 13, letterSpacing: ".14em", color: "#a1a1aa" }}>PAYUP · QR CLAIM</div>
         <h2 style={{ margin: "8px 0 2px", fontSize: 26 }}>{card.name}</h2>
+        {faucet && <div style={{ display: "inline-block", marginTop: 4, padding: "3px 10px", borderRadius: 999, background: "#EAA22122", color: "#EAA221", fontSize: 13 }}>🚰 Daily claim · once every {card.perWalletHours ?? 24}h per wallet</div>}
         <div className="tok" style={{ margin: "6px 0", opacity: ready ? 1 : 0.55 }}>{card.amount} <small>{card.token}</small></div>
         {card.demo && <div className="warn" style={{ marginBottom: 8 }}>Demo mode: nothing is sent yet.</div>}
         {status && <p style={{ color: card.state === "locked" ? "#EAA221" : "#a1a1aa", margin: "4px 0 8px" }}>{status}</p>}
         {card.links.map((l) => <a key={l.url} href={l.url} target="_blank" rel="noopener noreferrer" style={{ textDecoration: "none" }}><button className="big" style={{ background: "#27272a", color: "#fff", border: "1px solid #3f3f46" }}>{l.label} ↗</button></a>)}
-        {step === "done" ? (<div style={{ marginTop: 14 }}><div className="tok ok">✓ Claimed</div>{tx && <a style={{ color: "#EAA221" }} href={`https://basescan.org/tx/${tx}`} target="_blank">View on BaseScan ↗</a>}</div>)
-          : !ready ? <button className="big" disabled>{card.state === "locked" ? "Refilling soon" : card.state === "retired" ? "Claim retired" : "Claim empty"}</button>
+        {step === "done" ? (<div style={{ marginTop: 14 }}><div className="tok ok">✓ Claimed</div>{faucet && <p style={{ color: "#EAA221" }}>Come back in {comeBack ?? card.perWalletHours ?? 24}h for your next claim.</p>}{tx && <a style={{ color: "#EAA221" }} href={`https://basescan.org/tx/${tx}`} target="_blank">View on BaseScan ↗</a>}</div>)
+          : !ready ? <button className="big" disabled>{faucet ? "Faucet dry" : card.state === "locked" ? "Refilling soon" : card.state === "retired" ? "Claim retired" : "Claim empty"}</button>
           : prov ? <button className="big" disabled={step !== "idle"} onClick={onClaim}>{step === "busy" ? "Approve in wallet…" : step === "mining" ? "Confirming…" : `Claim ${card.amount} ${card.token}`}</button>
           : checked && (<div className="card" style={{ background: "#18181b", marginTop: 12 }}>
               <b>You need a wallet to claim</b>

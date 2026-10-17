@@ -59,3 +59,6 @@ Limitations: custom (non-GEAR/CAPH) token addresses are assumed to have 18 decim
   3. Vercel env: `CRON_SECRET` (random), optional `AUTO_REFILL_MIN_POOL` (whole tokens kept in reserve).
   4. Schedule. Vercel Hobby crons run at most once per day, so use **Upstash QStash**: create a schedule `* * * * *` to `https://payup.gearup.wtf/api/qrclaim-cron` with header `Upstash-Forward-Authorization: Bearer <CRON_SECRET>`. On Vercel Pro, a `vercel.json` cron at `* * * * *` on the same path works too.
   5. Check: POST `{"action":"health"}` to `/api/qrclaim` shows `refillWallet` (address) and `cronSecret: true`.
+
+## Faucet mode
+A faucet code is always claimable: each wallet can claim once per `perWalletHours` (rolling, default 24h), with an optional total claim cap. Fund it with "Fund faucet" (adds N tokens from the unassigned pool via `refill([slot], token, [N])`). Bulk refill adds the faucet's "Refill adds" amount instead of topping up to one claim. Auto-refill/cron skips faucets. Verified on a Base fork of the deployed contract: one slot funded with 5 GEAR paid three different wallets 1 GEAR each (per-claim nonce, no once-per-slot lock). Note: any refill/fund bumps the slot epoch, so a claim signed just before a refill must be re-requested (the app does this automatically on the next tap).
