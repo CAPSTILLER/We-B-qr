@@ -1,5 +1,5 @@
 // Real Base chain adapter (server-only). Reads env; never logs secrets.
-import { createPublicClient, createWalletClient, http, fallback, keccak256, toBytes, parseAbi, parseAbiItem, decodeEventLog, toCoinType } from "viem";
+import { createPublicClient, createWalletClient, http, fallback, namehash, keccak256, toBytes, parseAbi, parseAbiItem, decodeEventLog, toCoinType } from "viem";
 import { base, mainnet } from "viem/chains";
 import { privateKeyToAccount } from "viem/accounts";
 import { CAPS_MIND, HttpError, type Chain } from "./core.js";
@@ -41,15 +41,7 @@ export function realChain(): Chain {
     verifyLogin: (address, message, signature) => client.verifyMessage({ address, message, signature }), // EOA + smart wallets (1271/6492)
     gateBalance: (g, a) => client.readContract({ address: g, abi, functionName: "balanceOf", args: [a] }).catch(() => 0n),
     capsMindBalance: (a) => client.readContract({ address: CAPS_MIND, abi, functionName: "balanceOf", args: [a] }),
-    async primaryBasename(a) {
-      try {
-        const coinType = toCoinType(base.id);
-        const name = await eth.getEnsName({ address: a, coinType });
-        if (!name || !name.endsWith(".base.eth")) return null;
-        const fwd = await eth.getEnsAddress({ name, coinType });
-        return fwd?.toLowerCase() === a.toLowerCase() ? name : null;
-      } catch { return null; }
-    },
+    primaryBasename: (a) => baseBasename(client, a),
     async slot(key) {
       if (!contract) return null;
       const [token, balance, epoch, retired] = await client.readContract({ address: contract, abi, functionName: "slots", args: [key] });
@@ -87,4 +79,27 @@ export function keyAccount(name: string) {
   if (!k) return null;
   if (!k.startsWith("0x")) k = "0x" + k;
   try { return privateKeyToAccount(k as `0x${string}`); } catch { return null; }
+}
+
+/** Basenames on Base (same method as Gear Hub): reverse node `<addr>.80002105.reverse` via the Base ENS registry,
+ *  kept only if forward resolution points back. Returns null for "no name"; THROWS HttpError(503) on RPC failure. */
+const BN_REGISTRY = "0xB94704422c2a1E396835A571837Aa5AE53285a95" as const;
+const ZERO = "0x0000000000000000000000000000000000000000";
+const bnAbi = parseAbi(["function resolver(bytes32 node) view returns (address)", "function name(bytes32 node) view returns (string)", "function addr(bytes32 node) view returns (address)"]);
+export const looksLikeBasename = (n: string) => /^[a-z0-9-]{1,63}(\.[a-z0-9-]{1,63})*\.base\.eth$/.test(n);
+export async function baseBasename(client: any, a: string): Promise<string | null> {
+  try {
+    const rnode = namehash(`${a.toLowerCase().slice(2)}.80002105.reverse`);
+    const r = await client.readContract({ address: BN_REGISTRY, abi: bnAbi, functionName: "resolver", args: [rnode] });
+    if (!r || r === ZERO) return null;
+    const n = String(await client.readContract({ address: r, abi: bnAbi, functionName: "name", args: [rnode] })).toLowerCase();
+    if (!looksLikeBasename(n)) return null;
+    const fnode = namehash(n);
+    const fr = await client.readContract({ address: BN_REGISTRY, abi: bnAbi, functionName: "resolver", args: [fnode] });
+    if (!fr || fr === ZERO) return null;
+    const f = await client.readContract({ address: fr, abi: bnAbi, functionName: "addr", args: [fnode] });
+    return String(f).toLowerCase() === a.toLowerCase() ? n : null;
+  } catch {
+    throw new HttpError(503, "Couldn't check your Basename right now. Try again in a moment.");
+  }
 }

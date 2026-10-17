@@ -180,7 +180,7 @@ export class QrClaim {
       demoBalanceRaw: base?.demoBalanceRaw, autoRefillMin: mode === "faucet" ? 0 : base?.autoRefillMin, lastAutoAt: base?.lastAutoAt,
       name, token, amount, kind, links, gate: gate || undefined, createdBy: base?.createdBy, createdRole: base?.createdRole,
       folderId: input.folderId ?? base?.folderId ?? "",
-      basenameOnly: input.basenameOnly ?? base?.basenameOnly ?? kind === "digital",
+      basenameOnly: typeof input.basenameOnly === "boolean" ? input.basenameOnly : base?.basenameOnly ?? kind === "digital",
       unlockWindowH: mode === "faucet" ? 0 : Math.max(0, Math.min(720, Number(input.unlockWindowH ?? base?.unlockWindowH ?? 24))),
       dailyCap: Math.max(1, Math.min(100, Number(input.dailyCap ?? base?.dailyCap ?? DEFAULT_DAILY_CAP))),
       status: base?.status ?? "active", filled: base?.filled ?? false, refilledAt: base?.refilledAt ?? 0, unlockAt: base?.unlockAt ?? 0,
@@ -341,7 +341,7 @@ export class QrClaim {
     let name: string | undefined;
     if (c.basenameOnly) {
       name = (await this.c.primaryBasename(wallet)) ?? undefined;
-      if (!name) throw new HttpError(403, "This code needs a primary Basename (name.base.eth) set on this wallet");
+      if (!name) throw new HttpError(403, "This code needs a primary Basename. This wallet has no primary name.base.eth set (set one at base.org/names), or switch wallets.");
     }
     if (c.gate && (await this.c.gateBalance(c.gate as `0x${string}`, wallet)) === 0n) throw new HttpError(403, "This code is for holders of a gate NFT/token");
     const dk = `wd:${w}:${day()}`;

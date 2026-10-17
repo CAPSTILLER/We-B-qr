@@ -45,3 +45,18 @@ it("rotating mode unchanged: once per wallet ever", async () => {
   await handle({ action: "refill", ids: [c.id] }, owner);
   expect((await handle({ action: "prepare", id: c.id, wallet: W(1) }, {})).status).toBe(403);
 });
+
+it("basenameOnly off persists when converting to faucet; lookup errors are 'try again', not 'you need one'", async () => {
+  const c: any = (await handle({ action: "createCode", code: { name: "Conv", kind: "digital", unlockWindowH: 0 } }, owner)).json;
+  expect(c.basenameOnly).toBe(true);
+  const u: any = (await handle({ action: "updateCode", id: c.id, code: { ...c, mode: "faucet", basenameOnly: false } }, owner)).json;
+  expect(u).toMatchObject({ mode: "faucet", basenameOnly: false });
+  const again: any = (await handle({ action: "updateCode", id: c.id, code: { name: "Conv2" } }, owner)).json;
+  expect(again.basenameOnly).toBe(false);
+  await handle({ action: "updateCode", id: c.id, code: { basenameOnly: true } }, owner);
+  await handle({ action: "fundFaucet", id: c.id, amount: "5" }, owner);
+  const { HttpError } = await import("./core");
+  setChainForTests({ ...chain, primaryBasename: async () => { throw new HttpError(503, "Couldn't check your Basename right now. Try again in a moment."); } });
+  const r: any = await handle({ action: "prepare", id: c.id, wallet: W(5) }, {});
+  expect(r.status).toBe(503); expect(r.json.error).toMatch(/Couldn't check your Basename/);
+});

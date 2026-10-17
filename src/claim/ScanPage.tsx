@@ -10,10 +10,20 @@ const INVITE_CODE = "FPR4HYZ0";
 
 type Card = { mode?: "rotating" | "faucet"; perWalletHours?: number; name: string; token: string; amount: string; links: { label: string; url: string }[]; state: "ready" | "locked" | "empty" | "retired"; basenameOnly: boolean; demo: boolean };
 
-/** Detect only: never prompts. */
+/** Detect only: never prompts. Any EIP-1193 wallet works. In a wallet's in-app browser, window.ethereum is that
+ *  wallet, so prefer it; otherwise the first EIP-6963 announcement (MetaMask, Rabby, Rainbow, Phantom, Trust...). */
 function detectWallet(): EIP1193Provider | null {
-  return injected[0]?.provider ?? ((window as any).ethereum as EIP1193Provider | undefined) ?? null;
+  return ((window as any).ethereum as EIP1193Provider | undefined) ?? injected[0]?.provider ?? null;
 }
+const deepLinks = (url: string) => {
+  const noScheme = url.replace(/^https?:\/\//, ""), enc = encodeURIComponent(url);
+  return [
+    ["MetaMask", `https://metamask.app.link/dapp/${noScheme}`],
+    ["Coinbase / Base", `https://go.cb-w.com/dapp?cb_url=${enc}`],
+    ["Trust", `https://link.trustwallet.com/open_url?coin_id=8453&url=${enc}`],
+    ["Rainbow", `https://rnbwapp.com/dapp?url=${enc}`],
+  ] as const;
+};
 
 export function ScanPage() {
   const id = location.pathname.startsWith("/c/") ? location.pathname.slice(3) : "";
@@ -52,8 +62,9 @@ export function ScanPage() {
       setStep("done");
     }).catch((e) => { setStep("idle"); setMsg(humanError(e)); });
   };
+  const [copiedLink, setCopiedLink] = useState(false);
   const copy = () => { navigator.clipboard?.writeText(INVITE_CODE).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }); };
-  const openInWallet = `https://go.cb-w.com/dapp?cb_url=${encodeURIComponent(location.href)}`;
+  const copyLink = () => { navigator.clipboard?.writeText(location.href).then(() => { setCopiedLink(true); setTimeout(() => setCopiedLink(false), 1500); }); };
 
   const ring = `conic-gradient(${Object.values(GEAR_COLORS).join(",")},${GEAR_COLORS.crimson})`;
   if (err) return <div className="wrap"><div className="card" style={{ textAlign: "center", marginTop: 60 }}><div style={{ fontSize: 48 }}>⚙</div><p>{err}</p></div></div>;
@@ -75,11 +86,14 @@ export function ScanPage() {
           : !ready ? <button className="big" disabled>{faucet ? "Faucet dry" : card.state === "locked" ? "Refilling soon" : card.state === "retired" ? "Claim retired" : "Claim empty"}</button>
           : prov ? <button className="big" disabled={step !== "idle"} onClick={onClaim}>{step === "busy" ? "Approve in wallet…" : step === "mining" ? "Confirming…" : `Claim ${card.amount} ${card.token}`}</button>
           : checked && (<div className="card" style={{ background: "#18181b", marginTop: 12 }}>
-              <b>You need a wallet to claim</b>
-              <p className="muted">Get the Base app (Coinbase Wallet), then scan again or open this page in it.</p>
-              <a href={INVITE_URL} target="_blank" rel="noopener noreferrer"><button className="big">Get the Base app ↗</button></a>
-              <p className="muted" style={{ marginTop: 10 }}>My invite code: <button onClick={copy} style={{ padding: "4px 10px", fontFamily: "monospace" }}>{INVITE_CODE}</button> {copied ? "Copied!" : "(tap to copy)"}</p>
-              <a href={openInWallet}><button style={{ width: "100%", marginTop: 6 }}>Already have it? Open this page in the Base app</button></a>
+              <b>You need a crypto wallet to claim</b>
+              <p className="muted">Any wallet works. Open this page in your wallet app's browser:</p>
+              <div className="seg">{deepLinks(location.href).map(([n, u]) => <a key={n} href={u} style={{ flex: 1, minWidth: 120 }}><button style={{ width: "100%" }}>{n}</button></a>)}</div>
+              <button style={{ width: "100%", marginTop: 8 }} onClick={copyLink}>{copiedLink ? "Link copied ✓" : "Copy link (paste in any wallet's browser)"}</button>
+              <div style={{ borderTop: "1px solid #27272a", marginTop: 12, paddingTop: 10 }}>
+                <a href={INVITE_URL} target="_blank" rel="noopener noreferrer"><button style={{ width: "100%" }}>New to crypto? Get the Base app ↗</button></a>
+                <p className="muted" style={{ marginTop: 8 }}>Invite code: <button onClick={copy} style={{ padding: "4px 10px", fontFamily: "monospace" }}>{INVITE_CODE}</button> {copied ? "Copied!" : "(tap to copy)"}</p>
+              </div>
             </div>)}
         {me && step !== "done" && <p className="muted">Wallet {short(me)}</p>}
         {card.basenameOnly && ready && <p className="muted">Needs a primary Basename (name.base.eth) on your wallet.</p>}

@@ -143,6 +143,9 @@ function AutoRefill({ ids, value, done, onErr }: { ids: string[]; value?: number
 function CodeForm({ st, onSaved, onErr, edit }: { st: State; onSaved: (c: Code) => void; onErr: (e: string) => void; edit?: Code }) {
   const [f, setF] = useState<any>(edit ?? { name: "", folderId: st.folders.find((x) => x.id !== "bot-grab")?.id ?? "", token: "GEAR", amount: "1", kind: "paper", basenameOnly: false, unlockWindowH: 24, dailyCap: 3, links: [] });
   const set = (k: string, v: any) => setF((o: any) => ({ ...o, [k]: v }));
+  // Basename-only is only auto-suggested on a NEW code until you touch it; editing never flips it.
+  const [bnTouched, setBnTouched] = useState(!!edit);
+  const suggestBn = (v: boolean) => (o: any) => (bnTouched ? o : { ...o, basenameOnly: v });
   const links: Link[] = [...f.links, ...Array(3).fill({ label: "", url: "" })].slice(0, 3);
   const setLink = (i: number, k: keyof Link, v: string) => set("links", links.map((l, j) => (j === i ? { ...l, [k]: v } : l)));
   const save = () => (edit ? api("updateCode", { id: edit.id, code: f }) : api("createCode", { code: f })).then(onSaved).catch((e) => onErr(e.message));
@@ -153,7 +156,7 @@ function CodeForm({ st, onSaved, onErr, edit }: { st: State; onSaved: (c: Code) 
     {st.role === "owner" && <input style={{ marginTop: 6 }} placeholder="owner: other token 0x…" value={st.allowedTokens.includes(f.token) ? "" : f.token} onChange={(e) => set("token", e.target.value.trim() || "GEAR")} />}
     <label>Mode</label><div className="seg">
       <button className={(f.mode ?? "rotating") === "rotating" ? "on" : ""} onClick={() => set("mode", "rotating")}>🔁 Rotating</button>
-      <button className={f.mode === "faucet" ? "on" : ""} onClick={() => setF((o: any) => ({ ...o, mode: "faucet", basenameOnly: true, fundAmount: o.fundAmount ?? String(Number(o.amount || 1) * 25) }))}>🚰 Faucet (daily claim)</button></div>
+      <button className={f.mode === "faucet" ? "on" : ""} onClick={() => setF((o: any) => ({ ...suggestBn(true)(o), mode: "faucet", fundAmount: o.fundAmount ?? String(Number(o.amount || 1) * 25) }))}>🚰 Faucet (daily claim)</button></div>
     {f.mode === "faucet" && <p className="muted">Faucet: always claimable. Each wallet can claim once per period. Fund it with many claims' worth. Basename-only or a gate is recommended.</p>}
     {f.mode === "faucet" && <div className="row">
       <div><label>Hours between claims (per wallet)</label><input type="number" value={f.perWalletHours ?? 24} onChange={(e) => set("perWalletHours", +e.target.value)} /></div>
@@ -163,9 +166,9 @@ function CodeForm({ st, onSaved, onErr, edit }: { st: State; onSaved: (c: Code) 
       {f.mode !== "faucet" && <div><label>Unlock window (h)</label><input type="number" value={f.unlockWindowH} onChange={(e) => set("unlockWindowH", +e.target.value)} /></div>}
       <div><label>Wallet claims/day</label><input type="number" value={f.dailyCap} onChange={(e) => set("dailyCap", +e.target.value)} /></div></div>
     <label>Type</label><div className="seg">
-      <button className={f.kind === "paper" ? "on" : ""} onClick={() => setF((o: any) => ({ ...o, kind: "paper", basenameOnly: false }))}>🧾 Paper</button>
-      <button className={f.kind === "digital" ? "on" : ""} onClick={() => setF((o: any) => ({ ...o, kind: "digital", basenameOnly: true }))}>📱 Digital</button>
-      <button className={f.basenameOnly ? "on" : ""} onClick={() => set("basenameOnly", !f.basenameOnly)}>Basename only: {f.basenameOnly ? "on" : "off"}</button></div>
+      <button className={f.kind === "paper" ? "on" : ""} onClick={() => setF((o: any) => ({ ...suggestBn(false)(o), kind: "paper" }))}>🧾 Paper</button>
+      <button className={f.kind === "digital" ? "on" : ""} onClick={() => setF((o: any) => ({ ...suggestBn(true)(o), kind: "digital" }))}>📱 Digital</button>
+      <button className={f.basenameOnly ? "on" : ""} onClick={() => { setBnTouched(true); set("basenameOnly", !f.basenameOnly); }}>Basename only: {f.basenameOnly ? "ON" : "off"}</button></div>
     <label>Gate (optional: only holders of this NFT/token contract can claim)</label><input placeholder="0x… gate contract" value={f.gate ?? ""} onChange={(e) => set("gate", e.target.value.trim())} />
     <label>Link buttons on the card (up to 3)</label>
     {links.map((l, i) => <div className="row" key={i} style={{ marginBottom: 6 }}><input placeholder={`Button ${i + 1} label`} value={l.label} onChange={(e) => setLink(i, "label", e.target.value)} /><input placeholder="https://…" value={l.url} onChange={(e) => setLink(i, "url", e.target.value)} /></div>)}
