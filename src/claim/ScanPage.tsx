@@ -101,5 +101,7 @@ export function ScanPage() {
       </div>
     </div>
     <p className="muted" style={{ textAlign: "center", marginTop: 14 }}>You approve once in your wallet to claim. Claimer pays a few cents of Base gas.</p>
+    <style>{`.gear-home{display:block;width:28px;height:28px;margin:12px auto 20px;opacity:.4;filter:grayscale(1);transition:opacity .2s,filter .2s}.gear-home:hover,.gear-home:focus-visible{opacity:.9;filter:none}`}</style>
+    <a href="https://payup.gearup.wtf/" aria-label="Gear landing page" className="gear-home"><img src="/gear.png" alt="" width={28} height={28} style={{ display: "block", width: 28, height: 28 }} /></a>
   </div>);
 }
