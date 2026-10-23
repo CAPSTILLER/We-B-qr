@@ -135,3 +135,91 @@ export function randomSecret(): string {
   const b = crypto.getRandomValues(new Uint8Array(32));
   return Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
 }
+
+// ---- multi-link share pages (no server storage) ----
+export interface LinkItem { url: string; label?: string }
+/** Only http(s) links are allowed (blocks javascript:, data:, etc.). Bare domains get https://. */
+export function safeUrl(raw: string): string | null {
+  let s = (raw || "").trim();
+  if (!s) return null;
+  if (!/^[a-z][a-z0-9+.-]*:/i.test(s)) s = "https://" + s;
+  try {
+    const u = new URL(s);
+    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+    if (!u.hostname || !u.hostname.includes(".")) return null;
+    return u.href;
+  } catch { return null; }
+}
+const b64u = (s: string) => {
+  const bytes = new TextEncoder().encode(s);
+  let bin = ""; bytes.forEach((b) => (bin += String.fromCharCode(b)));
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+};
+const unb64u = (s: string) => {
+  const bin = atob(s.replace(/-/g, "+").replace(/_/g, "/"));
+  return new TextDecoder().decode(Uint8Array.from(bin, (c) => c.charCodeAt(0)));
+};
+export function encodeLinks(items: LinkItem[], title = ""): string {
+  const l = items.slice(0, 3).map((i) => (i.label?.trim() ? [i.url, i.label.trim().slice(0, 40)] : [i.url]));
+  return b64u(JSON.stringify(title.trim() ? { t: title.trim().slice(0, 40), l } : { l }));
+}
+export function decodeLinks(data: string): { title: string; links: LinkItem[] } {
+  try {
+    const o = JSON.parse(unb64u(data));
+    const links: LinkItem[] = [];
+    for (const e of Array.isArray(o.l) ? o.l.slice(0, 3) : []) {
+      const url = safeUrl(String(e?.[0] ?? ""));
+      if (url) links.push({ url, label: e[1] ? String(e[1]).slice(0, 40) : undefined });
+    }
+    return { title: typeof o.t === "string" ? o.t.slice(0, 40) : "", links };
+  } catch { return { title: "", links: [] }; }
+}
+export function linksPage(origin: string, items: LinkItem[], title = ""): string {
+  return `${origin}/l#${encodeLinks(items, title)}`;
+}
+
+// ---- image QR art (halftone: image woven through the modules) ----
+export interface ArtOpts { colors: boolean; contrast: number; dot: number; dark: string; light: string; px?: number }
+const hexRgb = (h: string) => { const n = parseInt(h.slice(1), 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; };
+/**
+ * Each module becomes a 3x3 cell. The center (size = dot) always carries the true module color,
+ * function patterns (finders, timing, alignment, format) stay solid, and the outer ring shows the
+ * image, pushed darker on dark modules and lighter on light ones (contrast 0..1). Level H.
+ * img: RGBA pixels already resized to (n*3) x (n*3).
+ */
+export function artQr(text: string, img: Uint8ClampedArray, o: ArtOpts) {
+  const qr = QRCode.create(text, { errorCorrectionLevel: "H" });
+  const m = qr.modules, n = m.size, sub = 3, q = 4;
+  const px = o.px ?? 4; // pixels per sub-cell
+  const W = (n + q * 2) * sub * px;
+  const out = new Uint8ClampedArray(W * W * 4);
+  const D = hexRgb(o.dark), L = hexRgb(o.light);
+  const k = Math.max(0, Math.min(1, o.contrast));
+  const lo = 0.42 * (1 - k) * 255 + 0, hi = 255 - 0.42 * (1 - k) * 255; // max luminance on dark, min on light
+  for (let i = 0; i < W * W; i++) out.set([...L, 255], i * 4);
+  const c0 = (1 - o.dot) / 2 * sub, c1 = sub - c0;
+  for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+    const dark = m.get(y, x) === 1 || (m.get(y, x) as unknown) === true;
+    const solid = !!m.isReserved(y, x);
+    for (let sy = 0; sy < sub; sy++) for (let sx = 0; sx < sub; sx++) {
+      const center = sx + 0.5 > c0 && sx + 0.5 < c1 && sy + 0.5 > c0 && sy + 0.5 < c1;
+      let rgb: number[];
+      if (solid || center) rgb = dark ? D : L;
+      else {
+        const ii = ((y * sub + sy) * n * sub + (x * sub + sx)) * 4;
+        let r = img[ii], g = img[ii + 1], b = img[ii + 2];
+        const a = img[ii + 3] / 255; r = r * a + 255 * (1 - a); g = g * a + 255 * (1 - a); b = b * a + 255 * (1 - a);
+        if (!o.colors) { const l = 0.299 * r + 0.587 * g + 0.114 * b; r = g = b = l; }
+        const l = 0.299 * r + 0.587 * g + 0.114 * b;
+        if (dark && l > lo) { const f = lo / Math.max(l, 1); r *= f; g *= f; b *= f; }
+        if (!dark && l < hi) { const f = (255 - hi) / Math.max(255 - l, 1); r = 255 - (255 - r) * f; g = 255 - (255 - g) * f; b = 255 - (255 - b) * f; }
+        rgb = [r, g, b];
+      }
+      const X0 = ((x + q) * sub + sx) * px, Y0 = ((y + q) * sub + sy) * px;
+      for (let yy = 0; yy < px; yy++) for (let xx = 0; xx < px; xx++) out.set([rgb[0], rgb[1], rgb[2], 255], ((Y0 + yy) * W + X0 + xx) * 4);
+    }
+  }
+  return { width: W, height: W, data: out, grid: n * sub };
+}
+/** Side length (in sub-cells) the source image must be resized to for artQr. */
+export function artGrid(text: string): number { return QRCode.create(text, { errorCorrectionLevel: "H" }).modules.size * 3; }

@@ -10,8 +10,16 @@ button{padding:11px 12px;border-radius:10px;border:1px solid #3f3f46;background:
 button.on{background:#EAA221;color:#09090b;border-color:#EAA221}button.big{width:100%;padding:16px;font-size:18px;background:#EAA221;color:#09090b;border:0;margin-top:12px}
 button:disabled{opacity:.5}.sw{display:flex;gap:6px;flex-wrap:wrap}.sw i{width:30px;height:30px;border-radius:50%;display:inline-block;border:2px solid transparent;cursor:pointer}.sw i.on{border-color:#fff}
 .qr{display:flex;justify-content:center;padding:10px}.qr svg{width:100%;max-width:340px;height:auto;border-radius:14px}
-.spin svg{animation:wob 3s ease-in-out infinite}@keyframes wob{0%,100%{transform:rotate(-2deg) scale(1)}50%{transform:rotate(2deg) scale(1.03)}}
 .warn{color:#fbbf24;font-size:13px;margin-top:6px}.ok{color:#4ade80}.muted{color:#a1a1aa;font-size:13px;word-break:break-all}
 .tok{font-size:54px;font-weight:800;text-align:center;margin:10px 0}.tok small{font-size:22px;color:#a1a1aa}
 .sheet{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px}.sheet svg{width:100%;height:auto}
 @media print{body{background:#fff}.noprint{display:none!important}.wrap{max-width:none;padding:0}.sheet{grid-template-columns:repeat(3,2.4in);gap:.15in}.card{border:0;background:none;padding:0}}
+.qr img{width:100%;max-width:340px;height:auto;border-radius:14px;image-rendering:pixelated}
+.linkrow{border-top:1px solid #27272a;margin-top:10px}
+input[type=range]{padding:0}
+.lp-back{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:18px;background:radial-gradient(circle at 50% 30%,#1f1a0e,#09090b 70%)}
+.lp-card{width:100%;max-width:380px;background:#18181b;border:1px solid #EAA221;border-radius:20px;padding:20px 16px 14px;box-shadow:0 20px 60px #000a}
+.lp-title{font-size:22px;font-weight:800;text-align:center;margin-bottom:14px;color:#EAA221}
+.lp-link{display:grid;grid-template-columns:1fr auto;grid-template-rows:auto auto;align-items:center;text-decoration:none;color:#fff;background:#27272a;border:1px solid #3f3f46;border-radius:14px;padding:14px 16px;margin:10px 0}
+.lp-link b{font-size:17px;overflow-wrap:anywhere}.lp-link small{color:#a1a1aa;font-size:13px;grid-row:2}.lp-link span{grid-row:1/3;grid-column:2;color:#EAA221;font-size:22px}
+.lp-gear{display:block;width:120px;margin:16px auto 2px;opacity:.9}.lp-gear img{display:block;image-rendering:pixelated}

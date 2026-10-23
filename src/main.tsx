@@ -5,7 +5,8 @@ import { PayPage } from "./PayPage";
 import { ScanPage } from "./claim/ScanPage";
 import { AdminPage } from "./claim/AdminPage";
 import { PaperGears } from "./PaperGears";
+import { LinksPage } from "./LinksPage";
 
 const path = location.pathname.replace(/\/$/, "");
-const Page = path.startsWith("/c/") ? ScanPage : path === "/claim-admin" ? AdminPage : path === "/pay" ? PayPage : path === "/claim" ? ScanPage : path === "/paper" ? PaperGears : Studio;
+const Page = path.startsWith("/c/") ? ScanPage : path === "/claim-admin" ? AdminPage : path === "/pay" ? PayPage : path === "/claim" ? ScanPage : path === "/paper" ? PaperGears : path === "/l" ? LinksPage : Studio;
 createRoot(document.getElementById("root")!).render(<Page />);
